@@ -19,14 +19,18 @@ sudo apt-get install -y \
     git \
     rsync
 
-echo "==> Phase 2: User groups (video for camera access)"
-sudo usermod -aG video techno || true
+echo "==> Phase 2: Enable I2C (required for INA219 power monitor)"
+sudo raspi-config nonint do_i2c 0
+echo "  I2C enabled — reboot required before /dev/i2c-1 appears"
 
-echo "==> Phase 3: Create deploy and capture directories"
+echo "==> Phase 3: User groups (video + i2c)"
+sudo usermod -aG video,i2c techno || true
+
+echo "==> Phase 4: Create deploy and capture directories"
 sudo mkdir -p "$DEPLOY_PATH" "$CAPTURE_DIR"
 sudo chown -R techno:techno "$DEPLOY_PATH"
 
-echo "==> Phase 4: Create Python venv"
+echo "==> Phase 5: Create Python venv"
 # --system-site-packages gives the venv access to picamera2 and its C extensions
 # which are installed as system packages and cannot be pip-installed cleanly on Pi OS.
 if [ ! -d "$VENV_PATH" ]; then
@@ -38,7 +42,7 @@ else
     echo "  venv already exists"
 fi
 
-echo "==> Phase 5: Install systemd service"
+echo "==> Phase 6: Install systemd service"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_SRC="$SCRIPT_DIR/field-node.service"
 if [ -f "$SERVICE_SRC" ]; then
@@ -49,7 +53,7 @@ else
     echo "  WARNING: $SERVICE_SRC not found, skipping service install"
 fi
 
-echo "==> Phase 6: Passwordless sudo for systemctl (required for GitHub Actions deploy)"
+echo "==> Phase 7: Passwordless sudo for systemctl (required for GitHub Actions deploy)"
 SUDOERS_FILE="/etc/sudoers.d/field-node"
 SUDOERS_RULE="techno ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart field-node, /usr/bin/systemctl start field-node, /usr/bin/systemctl stop field-node, /usr/bin/systemctl enable field-node"
 if [ -f "$SUDOERS_FILE" ]; then
@@ -60,7 +64,7 @@ else
     echo "  sudoers rule installed"
 fi
 
-echo "==> Phase 7: Verify camera"
+echo "==> Phase 8: Verify camera"
 echo "  Running rpicam-hello --list-cameras:"
 rpicam-hello --list-cameras || echo "  WARNING: camera not detected — check cable and config.txt"
 
