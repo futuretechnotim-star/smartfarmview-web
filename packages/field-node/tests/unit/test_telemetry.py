@@ -1,5 +1,5 @@
 import json
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -20,7 +20,6 @@ def test_publish_heartbeat_sends_to_correct_topic(publisher, mock_mqtt):
     ):
         publisher.publish_heartbeat()
 
-    # find the telemetry publish call among any others
     telemetry_calls = [c for c in mock_mqtt.publish.call_args_list if "/telemetry" in c[0][0]]
     assert len(telemetry_calls) == 1
     topic, payload_str = telemetry_calls[0][0][:2]
@@ -48,11 +47,35 @@ def test_publish_motion_event(publisher, mock_mqtt):
     assert any("/motion" in t for t in topics)
 
 
-def test_discovery_publishes_three_entities(publisher, mock_mqtt):
+def test_discovery_publishes_five_entities(publisher, mock_mqtt):
     mock_mqtt.publish.reset_mock()
     publisher.publish_discovery()
-    assert mock_mqtt.publish.call_count == 3
+    assert mock_mqtt.publish.call_count == 5
     topics = [c[0][0] for c in mock_mqtt.publish.call_args_list]
     assert any("cpu_temp" in t for t in topics)
     assert any("storage_pct" in t for t in topics)
     assert any("motion" in t for t in topics)
+    assert any("snapshot" in t for t in topics)
+    assert any("capture" in t for t in topics)
+
+
+def test_publish_snapshot(publisher, mock_mqtt):
+    jpeg_bytes = b"\xff\xd8\xff" + b"\x00" * 100
+    publisher.publish_snapshot(jpeg_bytes)
+    mock_mqtt.publish.assert_called_once()
+    topic = mock_mqtt.publish.call_args[0][0]
+    payload = mock_mqtt.publish.call_args[0][1]
+    assert "/snapshot" in topic
+    assert payload == jpeg_bytes
+
+
+def test_on_command_capture_calls_handler(mock_mqtt):
+    handler = MagicMock()
+    pub = TelemetryPublisher(on_command=handler)
+    pub._connected = True
+
+    msg = MagicMock()
+    msg.payload = json.dumps({"cmd": "capture"}).encode()
+    pub._on_message(mock_mqtt, None, msg)
+
+    handler.assert_called_once_with({"cmd": "capture"})

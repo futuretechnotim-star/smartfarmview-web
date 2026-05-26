@@ -1,6 +1,7 @@
 import json
 import shutil
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 import paho.mqtt.client as mqtt
@@ -9,6 +10,8 @@ import structlog
 from field_node.config import settings
 
 log = structlog.get_logger()
+
+CommandHandler = Callable[[dict[str, object]], None]
 
 
 def _cpu_temp() -> float:
@@ -36,12 +39,14 @@ def _device_info() -> dict[str, object]:
 
 
 class TelemetryPublisher:
-    def __init__(self) -> None:
+    def __init__(self, on_command: CommandHandler | None = None) -> None:
+        self._on_command = on_command
         self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=settings.node_id)  # type: ignore[attr-defined]
         if settings.mqtt_username:
             self._client.username_pw_set(settings.mqtt_username, settings.mqtt_password)
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect  # type: ignore[assignment]
+        self._client.on_message = self._on_message
         self._connected = False
 
     def connect(self) -> None:
@@ -57,6 +62,7 @@ class TelemetryPublisher:
         properties: object = None,
     ) -> None:
         self._connected = True
+        self._client.subscribe(self._topic("cmd"), qos=1)
         log.info("mqtt_connected", host=settings.mqtt_host, port=settings.mqtt_port)
         self.publish_discovery()
 
@@ -71,12 +77,19 @@ class TelemetryPublisher:
         self._connected = False
         log.warning("mqtt_disconnected", rc=rc)
 
+    def _on_message(self, client: mqtt.Client, userdata: object, msg: mqtt.MQTTMessage) -> None:
+        try:
+            payload = json.loads(msg.payload)
+            if self._on_command:
+                self._on_command(payload)
+        except Exception as e:
+            log.warning("cmd_parse_error", error=str(e))
+
     def _topic(self, key: str) -> str:
         return f"securitymesh/{settings.node_id}/{key}"
 
     def _discovery_topic(self, component: str, object_id: str) -> str:
-        prefix = settings.mqtt_discovery_prefix
-        return f"{prefix}/{component}/{settings.node_id}/{object_id}/config"
+        return f"{settings.mqtt_discovery_prefix}/{component}/{settings.node_id}/{object_id}/config"
 
     def _publish_raw(self, topic: str, payload: object, retain: bool = False) -> None:
         self._client.publish(topic, json.dumps(payload), qos=1, retain=retain)
@@ -87,13 +100,22 @@ class TelemetryPublisher:
             return
         self._client.publish(self._topic(key), json.dumps(payload), qos=1, retain=False)
 
+    def publish_snapshot(self, jpeg_bytes: bytes) -> None:
+        if not self._connected:
+            log.warning("mqtt_not_connected_skipping", key="snapshot")
+            return
+        self._client.publish(self._topic("snapshot"), jpeg_bytes, qos=1, retain=True)
+        log.info("snapshot_published", size_kb=round(len(jpeg_bytes) / 1024, 1))
+
     def publish_discovery(self) -> None:
         node = settings.node_id
         telemetry_topic = self._topic("telemetry")
         motion_state_topic = self._topic("motion_state")
+        snapshot_topic = self._topic("snapshot")
+        cmd_topic = self._topic("cmd")
         device = _device_info()
 
-        entities = [
+        entities: list[tuple[str, str, dict[str, object]]] = [
             (
                 "sensor",
                 "cpu_temp",
@@ -132,6 +154,28 @@ class TelemetryPublisher:
                     "payload_on": "ON",
                     "payload_off": "OFF",
                     "device_class": "motion",
+                    "device": device,
+                },
+            ),
+            (
+                "camera",
+                "snapshot",
+                {
+                    "name": "Camera",
+                    "unique_id": f"{node}_camera",
+                    "topic": snapshot_topic,
+                    "device": device,
+                },
+            ),
+            (
+                "button",
+                "capture",
+                {
+                    "name": "Capture Snapshot",
+                    "unique_id": f"{node}_capture_btn",
+                    "command_topic": cmd_topic,
+                    "payload_press": json.dumps({"cmd": "capture"}),
+                    "icon": "mdi:camera",
                     "device": device,
                 },
             ),

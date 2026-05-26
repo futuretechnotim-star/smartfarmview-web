@@ -24,7 +24,16 @@ def main() -> None:
     log.info("field_node_starting", node_id=settings.node_id)
 
     camera = Camera()
-    telemetry = TelemetryPublisher()
+
+    def on_command(payload: dict[str, object]) -> None:
+        cmd = payload.get("cmd")
+        if cmd == "capture":
+            log.info("capture_command_received")
+            path = camera.capture_still()
+            jpeg_bytes = path.read_bytes()
+            telemetry.publish_snapshot(jpeg_bytes)
+
+    telemetry = TelemetryPublisher(on_command=on_command)
     telemetry.connect()
 
     last_telemetry = 0.0
@@ -38,7 +47,6 @@ def main() -> None:
                 last_telemetry = now
 
             # PIR motion detection will be wired here once the sensor is added.
-            # For now the loop only publishes periodic telemetry.
 
             time.sleep(1)
     finally:
