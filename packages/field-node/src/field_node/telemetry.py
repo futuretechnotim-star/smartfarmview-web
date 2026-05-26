@@ -25,11 +25,11 @@ def _storage_percent() -> float:
 
 class TelemetryPublisher:
     def __init__(self) -> None:
-        self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=settings.node_id)
+        self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=settings.node_id)  # type: ignore[attr-defined]
         if settings.mqtt_username:
             self._client.username_pw_set(settings.mqtt_username, settings.mqtt_password)
         self._client.on_connect = self._on_connect
-        self._client.on_disconnect = self._on_disconnect
+        self._client.on_disconnect = self._on_disconnect  # type: ignore[assignment]
         self._connected = False
 
     def connect(self) -> None:
