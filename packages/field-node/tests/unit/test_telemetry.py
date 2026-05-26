@@ -32,7 +32,11 @@ def test_publish_heartbeat_sends_to_correct_topic(publisher, mock_mqtt):
 def test_publish_skipped_when_not_connected(mock_mqtt):
     pub = TelemetryPublisher()
     pub._connected = False
-    pub.publish_heartbeat()
+    with (
+        patch("field_node.telemetry._cpu_temp", return_value=45.0),
+        patch("field_node.telemetry._storage_percent", return_value=12.5),
+    ):
+        pub.publish_heartbeat()
     mock_mqtt.publish.assert_not_called()
 
 
