@@ -32,6 +32,7 @@ echo "==> Phase 4: Create Python venv"
 if [ ! -d "$VENV_PATH" ]; then
     python3 -m venv --system-site-packages "$VENV_PATH"
     "$VENV_PATH/bin/pip" install --upgrade pip --quiet
+    echo "  venv ready"
     echo "  venv created at $VENV_PATH"
 else
     echo "  venv already exists"

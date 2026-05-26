@@ -8,7 +8,6 @@ version = "0.1.0"
 description = "SecurityMesh Field Node — camera capture, motion detection, and MQTT telemetry"
 requires-python = ">=3.12"
 dependencies = [
-    "picamera2>=0.3",
     "paho-mqtt>=2.0",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
@@ -17,6 +16,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+hardware = [
+    "picamera2>=0.3",
+]
 dev = [
     "pytest>=7.4",
     "pytest-asyncio>=0.23",

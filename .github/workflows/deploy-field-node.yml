@@ -55,7 +55,7 @@ jobs:
       - name: Install dependencies on Pi
         run: |
           ssh -i ~/.ssh/deploy_key ${{ env.TARGET }} \
-            "cd ${{ env.DEPLOY_PATH }} && .venv/bin/pip install -e . --quiet"
+            "cd ${{ env.DEPLOY_PATH }} && .venv/bin/pip install -e '.[hardware]' --quiet"
 
       - name: Restart service
         run: |
