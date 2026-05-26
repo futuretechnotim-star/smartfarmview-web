@@ -24,6 +24,9 @@ class Settings(BaseSettings):
     # Telemetry
     telemetry_interval_seconds: int = 60
 
+    # Power monitor driver — swap to change HAT (see docs/power-hat.md)
+    power_monitor: str = "ina219_hat"
+
     # PIR GPIO pin (BCM numbering) — not yet wired, reserved for future use
     pir_gpio_pin: int = 17
 

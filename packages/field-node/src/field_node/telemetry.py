@@ -3,11 +3,15 @@ import shutil
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import paho.mqtt.client as mqtt
 import structlog
 
 from field_node.config import settings
+
+if TYPE_CHECKING:
+    from field_node.power.base import PowerReading
 
 log = structlog.get_logger()
 
@@ -158,6 +162,48 @@ class TelemetryPublisher:
                 },
             ),
             (
+                "sensor",
+                "battery_voltage",
+                {
+                    "name": "Battery Voltage",
+                    "unique_id": f"{node}_battery_voltage",
+                    "state_topic": telemetry_topic,
+                    "value_template": "{{ value_json.battery_voltage }}",
+                    "unit_of_measurement": "V",
+                    "device_class": "voltage",
+                    "state_class": "measurement",
+                    "device": device,
+                },
+            ),
+            (
+                "sensor",
+                "battery_current",
+                {
+                    "name": "Battery Current",
+                    "unique_id": f"{node}_battery_current",
+                    "state_topic": telemetry_topic,
+                    "value_template": "{{ value_json.battery_current_ma }}",
+                    "unit_of_measurement": "mA",
+                    "device_class": "current",
+                    "state_class": "measurement",
+                    "device": device,
+                },
+            ),
+            (
+                "sensor",
+                "battery_power",
+                {
+                    "name": "Battery Power",
+                    "unique_id": f"{node}_battery_power",
+                    "state_topic": telemetry_topic,
+                    "value_template": "{{ value_json.battery_power_mw }}",
+                    "unit_of_measurement": "mW",
+                    "device_class": "power",
+                    "state_class": "measurement",
+                    "device": device,
+                },
+            ),
+            (
                 "camera",
                 "snapshot",
                 {
@@ -186,15 +232,18 @@ class TelemetryPublisher:
             self._publish_raw(topic, config, retain=True)
             log.info("discovery_published", component=component, object_id=object_id)
 
-    def publish_heartbeat(self) -> None:
-        self.publish(
-            "telemetry",
-            {
-                "ts": time.time(),
-                "cpu_temp": _cpu_temp(),
-                "storage_pct": _storage_percent(),
-            },
-        )
+    def publish_heartbeat(self, power: "PowerReading | None" = None) -> None:
+        payload: dict[str, object] = {
+            "ts": time.time(),
+            "cpu_temp": _cpu_temp(),
+            "storage_pct": _storage_percent(),
+        }
+        if power is not None:
+            payload["battery_voltage"] = power.voltage_v
+            payload["battery_current_ma"] = power.current_ma
+            payload["battery_power_mw"] = power.power_mw
+            payload["battery_discharging"] = power.is_discharging
+        self.publish("telemetry", payload)
 
     def publish_motion_event(self, snapshot_path: str) -> None:
         self.publish("motion_state", "ON")
