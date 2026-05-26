@@ -131,4 +131,45 @@ Available cameras
 
 ---
 
+## Step 7 — Enable the service for auto-start on boot
+
+```bash
+sudo systemctl enable field-node
+```
+
+Expected output:
+```
+Created symlink '/etc/systemd/system/multi-user.target.wants/field-node.service' → '/etc/systemd/system/field-node.service'.
+```
+
+The service will now start automatically whenever the Pi powers on.
+
+To check logs at any time:
+```bash
+journalctl -u field-node -f
+```
+
+---
+
+## Step 8 — First deploy via GitHub Actions
+
+Push any change to `packages/field-node/**` on `main` to trigger the deploy workflow, or trigger it manually:
+
+```bash
+gh workflow run deploy-field-node.yml --repo futuretechnotim-star/smartfarmview-web --ref main
+```
+
+The workflow connects to the Pi over TailScale (IP: `100.70.1.11`), rsyncs the code to `/opt/field-node/`, runs `pip install -e '.[hardware]'`, and restarts the service.
+
+Verify the service came up:
+```bash
+systemctl status field-node --no-pager
+```
+
+Expected: `Active: active (running)` with camera initialization logs and a `camera_ready` info line.
+
+> **Note:** An `mqtt_not_connected_skipping` warning is expected until a gateway MQTT broker is configured.
+
+---
+
 <!-- Steps below are pending confirmation and will be added as setup progresses -->
