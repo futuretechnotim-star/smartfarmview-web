@@ -50,7 +50,7 @@ def test_publish_motion_event(publisher, mock_mqtt):
 def test_discovery_publishes_all_entities(publisher, mock_mqtt):
     mock_mqtt.publish.reset_mock()
     publisher.publish_discovery()
-    assert mock_mqtt.publish.call_count == 8
+    assert mock_mqtt.publish.call_count == 10
     topics = [c[0][0] for c in mock_mqtt.publish.call_args_list]
     assert any("cpu_temp" in t for t in topics)
     assert any("storage_pct" in t for t in topics)
@@ -58,6 +58,8 @@ def test_discovery_publishes_all_entities(publisher, mock_mqtt):
     assert any("battery_voltage" in t for t in topics)
     assert any("battery_current" in t for t in topics)
     assert any("battery_power" in t for t in topics)
+    assert any("battery_soc" in t for t in topics)
+    assert any("battery_runtime" in t for t in topics)
     assert any("snapshot" in t for t in topics)
     assert any("capture" in t for t in topics)
 

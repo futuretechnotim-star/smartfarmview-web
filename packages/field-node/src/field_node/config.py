@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     # Power monitor driver — swap to change HAT (see docs/power-hat.md)
     power_monitor: str = "ina219_hat"
 
+    # Battery capacity in mAh — update when swapping batteries
+    battery_capacity_mah: int = 1500
+
     # PIR GPIO pin (BCM numbering) — not yet wired, reserved for future use
     pir_gpio_pin: int = 17
 

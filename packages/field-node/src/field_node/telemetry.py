@@ -204,6 +204,34 @@ class TelemetryPublisher:
                 },
             ),
             (
+                "sensor",
+                "battery_soc",
+                {
+                    "name": "Battery Level",
+                    "unique_id": f"{node}_battery_soc",
+                    "state_topic": telemetry_topic,
+                    "value_template": "{{ value_json.battery_soc_pct }}",
+                    "unit_of_measurement": "%",
+                    "device_class": "battery",
+                    "state_class": "measurement",
+                    "device": device,
+                },
+            ),
+            (
+                "sensor",
+                "battery_runtime",
+                {
+                    "name": "Battery Runtime",
+                    "unique_id": f"{node}_battery_runtime",
+                    "state_topic": telemetry_topic,
+                    "value_template": "{{ value_json.battery_runtime_hours | default('unavailable') }}",
+                    "unit_of_measurement": "h",
+                    "icon": "mdi:timer-outline",
+                    "state_class": "measurement",
+                    "device": device,
+                },
+            ),
+            (
                 "camera",
                 "snapshot",
                 {
@@ -243,6 +271,10 @@ class TelemetryPublisher:
             payload["battery_current_ma"] = power.current_ma
             payload["battery_power_mw"] = power.power_mw
             payload["battery_discharging"] = power.is_discharging
+            payload["battery_soc_pct"] = power.soc_pct
+            runtime = power.runtime_hours(settings.battery_capacity_mah)
+            if runtime is not None:
+                payload["battery_runtime_hours"] = runtime
         self.publish("telemetry", payload)
 
     def publish_motion_event(self, snapshot_path: str) -> None:
