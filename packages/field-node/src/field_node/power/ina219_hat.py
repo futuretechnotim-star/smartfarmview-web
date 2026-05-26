@@ -4,6 +4,8 @@ Uses the onboard INA219 battery monitor at I2C address 0x43.
 See docs/power-hat.md for hardware details and DIP switch configuration.
 """
 
+from collections import deque
+
 import smbus2
 
 from field_node.power.base import PowerMonitor, PowerReading
@@ -33,8 +35,11 @@ def _read_signed_word(bus: smbus2.SMBus, addr: int, reg: int) -> int:
 
 
 class INA219HatMonitor(PowerMonitor):
+    _VOLTAGE_SMOOTHING = 5  # readings (~5 minutes at default 60s interval)
+
     def __init__(self) -> None:
         self._bus = smbus2.SMBus(_I2C_BUS)
+        self._voltage_history: deque[float] = deque(maxlen=self._VOLTAGE_SMOOTHING)
         # 32V range, PGA /8, 12-bit, continuous shunt+bus
         self._bus.write_word_data(
             _I2C_ADDR,
@@ -52,7 +57,9 @@ class INA219HatMonitor(PowerMonitor):
         raw_current = _read_signed_word(self._bus, _I2C_ADDR, _REG_CURRENT)
         raw_power = _read_signed_word(self._bus, _I2C_ADDR, _REG_POWER)
 
-        voltage_v = ((raw_bus >> 3) * 4) / 1000.0
+        raw_voltage_v = ((raw_bus >> 3) * 4) / 1000.0
+        self._voltage_history.append(raw_voltage_v)
+        voltage_v = sum(self._voltage_history) / len(self._voltage_history)
         current_ma = raw_current * _CURRENT_LSB_MA
         power_mw = raw_power * _POWER_LSB_MW
 
