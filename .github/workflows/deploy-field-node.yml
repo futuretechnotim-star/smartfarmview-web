@@ -1,0 +1,68 @@
+name: Deploy — field-node
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/field-node/**"
+  workflow_dispatch:
+    inputs:
+      target_host:
+        description: "SSH target (user@host)"
+        default: "techno@landplanmesh1"
+        required: false
+
+env:
+  TARGET: ${{ github.event.inputs.target_host || 'techno@landplanmesh1' }}
+  DEPLOY_PATH: /opt/field-node
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/field-node
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Connect to Tailscale
+        uses: tailscale/github-action@v2
+        with:
+          oauth-client-id: ${{ secrets.TAILSCALE_OAUTH_CLIENT_ID }}
+          oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
+          tags: tag:ci
+
+      - name: Set up SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PI_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          echo "${{ secrets.PI_SSH_KNOWN_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Sync code to Pi
+        run: |
+          rsync -avz --delete \
+            --exclude='.git' \
+            --exclude='tests/' \
+            --exclude='*.pyc' \
+            --exclude='__pycache__' \
+            --exclude='.venv/' \
+            --exclude='*.egg-info' \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes" \
+            ./ ${{ env.TARGET }}:${{ env.DEPLOY_PATH }}/
+
+      - name: Install dependencies on Pi
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ env.TARGET }} \
+            "cd ${{ env.DEPLOY_PATH }} && .venv/bin/pip install -e . --quiet"
+
+      - name: Restart service
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ env.TARGET }} \
+            "sudo systemctl restart field-node"
+
+      - name: Health check
+        run: |
+          ssh -i ~/.ssh/deploy_key ${{ env.TARGET }} \
+            "timeout 10 bash -c 'until systemctl is-active --quiet field-node; do sleep 1; done'"

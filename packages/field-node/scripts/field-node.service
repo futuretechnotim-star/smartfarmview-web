@@ -1,0 +1,21 @@
+[Unit]
+Description=SecurityMesh Field Node
+After=network.target
+
+[Service]
+Type=simple
+User=techno
+WorkingDirectory=/opt/field-node
+ExecStart=/opt/field-node/.venv/bin/field-node
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=5
+TimeoutStopSec=10
+StandardOutput=journal
+StandardError=journal
+SupplementaryGroups=video
+Environment=FIELD_NODE_ENV=hardware
+
+[Install]
+WantedBy=multi-user.target

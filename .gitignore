@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+coverage.xml
+.coverage
+htmlcov/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# macOS
+.DS_Store
+
+# VS Code
+.vscode/
+
+# Node (future web app)
+node_modules/
+.next/
+out/
+
+# Captures (runtime, not source)
+packages/field-node/captures/
