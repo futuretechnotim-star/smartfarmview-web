@@ -48,22 +48,26 @@ Devices communicate over a TailScale mesh. Key points:
 ## Development
 
 ### Prerequisites
+- Python 3.13 — for device packages (see `.python-version`)
 - Node.js (version TBD) — for web app
-- Python 3.x (version TBD) — for device packages
 - TailScale installed and authenticated on dev machine
 
-### Running the web app
-```bash
-# TBD once framework is chosen
-```
-
-### Working with a device package
+### Local dev setup for a device package
 ```bash
 cd packages/<device-name>
-python -m venv .venv && source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
-pytest
 ```
+
+### Before pushing — always run locally
+```bash
+ruff check src/ tests/     # lint
+ruff format src/ tests/    # format (auto-fixes in place)
+mypy src/                  # type check
+pytest tests/unit/         # unit tests
+```
+
+CI runs all four steps and will reject the push if any fail. Run them locally to avoid the round-trip.
 
 ## Code Conventions
 
