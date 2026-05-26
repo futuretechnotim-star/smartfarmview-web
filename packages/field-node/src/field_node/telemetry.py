@@ -19,8 +19,11 @@ def _cpu_temp() -> float:
 
 
 def _storage_percent() -> float:
-    usage = shutil.disk_usage(settings.capture_dir)
-    return round(usage.used / usage.total * 100, 1)
+    try:
+        usage = shutil.disk_usage(settings.capture_dir)
+        return round(usage.used / usage.total * 100, 1)
+    except Exception:
+        return -1.0
 
 
 def _device_info() -> dict[str, object]:
