@@ -172,4 +172,47 @@ Expected: `Active: active (running)` with camera initialization logs and a `came
 
 ---
 
+## Step 9 — Configure MQTT broker
+
+Create `/opt/field-node/.env` on the Pi with broker credentials. This file is excluded from git and from rsync — it persists across deploys.
+
+```bash
+sudo tee /opt/field-node/.env << EOF
+FIELD_NODE_MQTT_HOST=192.168.1.197
+FIELD_NODE_MQTT_USERNAME=field-node
+FIELD_NODE_MQTT_PASSWORD=<password>
+EOF
+sudo systemctl restart field-node
+```
+
+The MQTT broker is the Mosquitto add-on running on the Home Assistant Pi (`192.168.1.197:1883`). Authentication uses a dedicated HA user account (`field-node`) created in **Settings → People → Users**.
+
+Verify connection in logs:
+```bash
+journalctl -u field-node -n 10 --no-pager | grep mqtt
+```
+
+Expected:
+```
+mqtt_connected   host=192.168.1.197 port=1883
+discovery_published   component=sensor object_id=cpu_temp
+discovery_published   component=sensor object_id=storage_pct
+discovery_published   component=binary_sensor object_id=motion
+```
+
+---
+
+## Step 10 — Verify Home Assistant auto-discovery
+
+In Home Assistant: **Settings → Devices & Services → MQTT**
+
+A device named `LandPlanMesh1` should appear automatically with 3 entities:
+- **CPU Temperature** — updates every 60 seconds
+- **Storage Used** — updates every 60 seconds  
+- **Motion** — ON/OFF binary sensor (PIR not yet wired; will trigger on motion events)
+
+No manual HA configuration required — entities are registered via MQTT discovery on every node startup.
+
+---
+
 <!-- Steps below are pending confirmation and will be added as setup progresses -->
