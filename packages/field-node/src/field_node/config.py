@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     mqtt_port: int = 1883
     mqtt_username: str = ""
     mqtt_password: str = ""
+    mqtt_discovery_prefix: str = "homeassistant"
 
     # Camera
     capture_width: int = 1920

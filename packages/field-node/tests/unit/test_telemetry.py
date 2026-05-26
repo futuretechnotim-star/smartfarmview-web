@@ -20,11 +20,12 @@ def test_publish_heartbeat_sends_to_correct_topic(publisher, mock_mqtt):
     ):
         publisher.publish_heartbeat()
 
-    mock_mqtt.publish.assert_called_once()
-    topic, payload_str = mock_mqtt.publish.call_args[0][:2]
+    # find the telemetry publish call among any others
+    telemetry_calls = [c for c in mock_mqtt.publish.call_args_list if "/telemetry" in c[0][0]]
+    assert len(telemetry_calls) == 1
+    topic, payload_str = telemetry_calls[0][0][:2]
     payload = json.loads(payload_str)
     assert "securitymesh/" in topic
-    assert "/telemetry" in topic
     assert payload["cpu_temp"] == 45.0
     assert payload["storage_pct"] == 12.5
 
@@ -42,6 +43,16 @@ def test_publish_skipped_when_not_connected(mock_mqtt):
 
 def test_publish_motion_event(publisher, mock_mqtt):
     publisher.publish_motion_event("/opt/field-node/captures/test.jpg")
-    mock_mqtt.publish.assert_called_once()
-    topic = mock_mqtt.publish.call_args[0][0]
-    assert "/motion" in topic
+    topics = [c[0][0] for c in mock_mqtt.publish.call_args_list]
+    assert any("/motion_state" in t for t in topics)
+    assert any("/motion" in t for t in topics)
+
+
+def test_discovery_publishes_three_entities(publisher, mock_mqtt):
+    mock_mqtt.publish.reset_mock()
+    publisher.publish_discovery()
+    assert mock_mqtt.publish.call_count == 3
+    topics = [c[0][0] for c in mock_mqtt.publish.call_args_list]
+    assert any("cpu_temp" in t for t in topics)
+    assert any("storage_pct" in t for t in topics)
+    assert any("motion" in t for t in topics)
