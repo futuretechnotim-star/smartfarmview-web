@@ -1,5 +1,5 @@
 import datetime
-import os
+import time
 from pathlib import Path
 
 import structlog
@@ -40,7 +40,7 @@ class Camera:
         encoder = H264Encoder()
         output = FileOutput(str(path))
         self._cam.start_recording(encoder, output)
-        import time; time.sleep(duration_seconds)
+        time.sleep(duration_seconds)
         self._cam.stop_recording()
         self._cam.switch_mode(self._cam.create_still_configuration(
             main={"size": (settings.capture_width, settings.capture_height)}
