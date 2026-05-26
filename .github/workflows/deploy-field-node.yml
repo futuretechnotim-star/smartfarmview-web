@@ -49,6 +49,8 @@ jobs:
             --exclude='__pycache__' \
             --exclude='.venv/' \
             --exclude='*.egg-info' \
+            --exclude='captures/' \
+            --exclude='.env' \
             -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new" \
             ./ ${{ env.TARGET }}:${{ env.DEPLOY_PATH }}/
 
