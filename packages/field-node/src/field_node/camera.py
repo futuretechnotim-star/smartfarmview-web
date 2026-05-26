@@ -42,9 +42,11 @@ class Camera:
         self._cam.start_recording(encoder, output)
         time.sleep(duration_seconds)
         self._cam.stop_recording()
-        self._cam.switch_mode(self._cam.create_still_configuration(
-            main={"size": (settings.capture_width, settings.capture_height)}
-        ))
+        self._cam.switch_mode(
+            self._cam.create_still_configuration(
+                main={"size": (settings.capture_width, settings.capture_height)}
+            )
+        )
         log.info("clip_captured", path=str(path), duration=duration_seconds)
         return path
 

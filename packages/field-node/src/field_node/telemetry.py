@@ -36,11 +36,25 @@ class TelemetryPublisher:
         self._client.connect_async(settings.mqtt_host, settings.mqtt_port, keepalive=60)
         self._client.loop_start()
 
-    def _on_connect(self, client: mqtt.Client, userdata: object, flags: object, rc: int, properties: object = None) -> None:
+    def _on_connect(
+        self,
+        client: mqtt.Client,
+        userdata: object,
+        flags: object,
+        rc: int,
+        properties: object = None,
+    ) -> None:
         self._connected = True
         log.info("mqtt_connected", host=settings.mqtt_host, port=settings.mqtt_port)
 
-    def _on_disconnect(self, client: mqtt.Client, userdata: object, flags: object, rc: int, properties: object = None) -> None:
+    def _on_disconnect(
+        self,
+        client: mqtt.Client,
+        userdata: object,
+        flags: object,
+        rc: int,
+        properties: object = None,
+    ) -> None:
         self._connected = False
         log.warning("mqtt_disconnected", rc=rc)
 
@@ -54,17 +68,23 @@ class TelemetryPublisher:
         self._client.publish(self._topic(key), json.dumps(payload), qos=1, retain=False)
 
     def publish_heartbeat(self) -> None:
-        self.publish("telemetry", {
-            "ts": time.time(),
-            "cpu_temp": _cpu_temp(),
-            "storage_pct": _storage_percent(),
-        })
+        self.publish(
+            "telemetry",
+            {
+                "ts": time.time(),
+                "cpu_temp": _cpu_temp(),
+                "storage_pct": _storage_percent(),
+            },
+        )
 
     def publish_motion_event(self, snapshot_path: str) -> None:
-        self.publish("motion", {
-            "ts": time.time(),
-            "snapshot": snapshot_path,
-        })
+        self.publish(
+            "motion",
+            {
+                "ts": time.time(),
+                "snapshot": snapshot_path,
+            },
+        )
 
     def close(self) -> None:
         self._client.loop_stop()
