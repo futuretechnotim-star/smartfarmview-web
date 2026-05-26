@@ -9,11 +9,11 @@ on:
     inputs:
       target_host:
         description: "SSH target (user@host)"
-        default: "techno@landplanmesh1"
+        default: "techno@100.70.1.11"
         required: false
 
 env:
-  TARGET: ${{ github.event.inputs.target_host || 'techno@landplanmesh1' }}
+  TARGET: ${{ github.event.inputs.target_host || 'techno@100.70.1.11' }}
   DEPLOY_PATH: /opt/field-node
 
 jobs:
@@ -49,20 +49,20 @@ jobs:
             --exclude='__pycache__' \
             --exclude='.venv/' \
             --exclude='*.egg-info' \
-            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes" \
+            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new" \
             ./ ${{ env.TARGET }}:${{ env.DEPLOY_PATH }}/
 
       - name: Install dependencies on Pi
         run: |
-          ssh -i ~/.ssh/deploy_key ${{ env.TARGET }} \
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new ${{ env.TARGET }} \
             "cd ${{ env.DEPLOY_PATH }} && .venv/bin/pip install -e '.[hardware]' --quiet"
 
       - name: Restart service
         run: |
-          ssh -i ~/.ssh/deploy_key ${{ env.TARGET }} \
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new ${{ env.TARGET }} \
             "sudo systemctl restart field-node"
 
       - name: Health check
         run: |
-          ssh -i ~/.ssh/deploy_key ${{ env.TARGET }} \
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new ${{ env.TARGET }} \
             "timeout 10 bash -c 'until systemctl is-active --quiet field-node; do sleep 1; done'"
