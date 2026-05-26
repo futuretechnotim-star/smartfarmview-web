@@ -49,7 +49,18 @@ else
     echo "  WARNING: $SERVICE_SRC not found, skipping service install"
 fi
 
-echo "==> Phase 6: Verify camera"
+echo "==> Phase 6: Passwordless sudo for systemctl (required for GitHub Actions deploy)"
+SUDOERS_FILE="/etc/sudoers.d/field-node"
+SUDOERS_RULE="techno ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart field-node, /usr/bin/systemctl start field-node, /usr/bin/systemctl stop field-node, /usr/bin/systemctl enable field-node"
+if [ -f "$SUDOERS_FILE" ]; then
+    echo "  sudoers rule already exists"
+else
+    echo "$SUDOERS_RULE" | sudo tee "$SUDOERS_FILE" > /dev/null
+    sudo chmod 440 "$SUDOERS_FILE"
+    echo "  sudoers rule installed"
+fi
+
+echo "==> Phase 7: Verify camera"
 echo "  Running rpicam-hello --list-cameras:"
 rpicam-hello --list-cameras || echo "  WARNING: camera not detected — check cable and config.txt"
 
