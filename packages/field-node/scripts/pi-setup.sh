@@ -17,7 +17,8 @@ sudo apt-get install -y \
     python3-picamera2 \
     rpicam-apps \
     git \
-    rsync
+    rsync \
+    wireless-tools
 
 echo "==> Phase 2: Enable I2C (required for INA219 power monitor)"
 sudo raspi-config nonint do_i2c 0
@@ -53,16 +54,26 @@ else
     echo "  WARNING: $SERVICE_SRC not found, skipping service install"
 fi
 
-echo "==> Phase 7: Passwordless sudo for systemctl (required for GitHub Actions deploy)"
+echo "==> Phase 7: Passwordless sudo (systemctl + power management)"
 SUDOERS_FILE="/etc/sudoers.d/field-node"
-SUDOERS_RULE="techno ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart field-node, /usr/bin/systemctl start field-node, /usr/bin/systemctl stop field-node, /usr/bin/systemctl enable field-node"
-if [ -f "$SUDOERS_FILE" ]; then
-    echo "  sudoers rule already exists"
-else
-    echo "$SUDOERS_RULE" | sudo tee "$SUDOERS_FILE" > /dev/null
-    sudo chmod 440 "$SUDOERS_FILE"
-    echo "  sudoers rule installed"
-fi
+# Always overwrite so re-running this script picks up new rules
+sudo tee "$SUDOERS_FILE" > /dev/null << 'EOF'
+# GitHub Actions deploy
+techno ALL=(ALL) NOPASSWD: /usr/bin/systemctl restart field-node
+techno ALL=(ALL) NOPASSWD: /usr/bin/systemctl start field-node
+techno ALL=(ALL) NOPASSWD: /usr/bin/systemctl stop field-node
+techno ALL=(ALL) NOPASSWD: /usr/bin/systemctl enable field-node
+# Power management: CPU governor (one rule per core; Pi Zero 2 W has 4)
+techno ALL=(ALL) NOPASSWD: /usr/bin/tee /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
+techno ALL=(ALL) NOPASSWD: /usr/bin/tee /sys/devices/system/cpu/cpu1/cpufreq/scaling_governor
+techno ALL=(ALL) NOPASSWD: /usr/bin/tee /sys/devices/system/cpu/cpu2/cpufreq/scaling_governor
+techno ALL=(ALL) NOPASSWD: /usr/bin/tee /sys/devices/system/cpu/cpu3/cpufreq/scaling_governor
+# Power management: WiFi PSM
+techno ALL=(ALL) NOPASSWD: /usr/sbin/iwconfig wlan0 power on
+techno ALL=(ALL) NOPASSWD: /usr/sbin/iwconfig wlan0 power off
+EOF
+sudo chmod 440 "$SUDOERS_FILE"
+sudo visudo -cf "$SUDOERS_FILE" && echo "  sudoers rule installed/updated" || echo "  WARNING: sudoers syntax error"
 
 echo "==> Phase 8: Verify camera"
 echo "  Running rpicam-hello --list-cameras:"

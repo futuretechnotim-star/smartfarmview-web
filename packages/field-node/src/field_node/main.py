@@ -6,6 +6,7 @@ import structlog
 from field_node.camera import Camera
 from field_node.config import settings
 from field_node.power.base import PowerMonitor, PowerReading
+from field_node.power.manager import PowerManager
 from field_node.telemetry import TelemetryPublisher
 
 log = structlog.get_logger()
@@ -41,14 +42,20 @@ def main() -> None:
 
     camera = Camera()
     power = _load_power_monitor()
+    power_manager = PowerManager()
 
     def on_command(payload: dict[str, object]) -> None:
         cmd = payload.get("cmd")
         if cmd == "capture":
             log.info("capture_command_received")
+            if not power_manager.camera_enabled:
+                log.warning("capture_blocked", reason="critical_power_mode")
+                return
+            camera.wakeup()
             path = camera.capture_still()
-            jpeg_bytes = path.read_bytes()
-            telemetry.publish_snapshot(jpeg_bytes)
+            if power_manager.camera_standby_between_captures:
+                camera.standby()
+            telemetry.publish_snapshot(path.read_bytes())
 
     telemetry = TelemetryPublisher(on_command=on_command)
     telemetry.connect()
@@ -59,14 +66,23 @@ def main() -> None:
         while _running:
             now = time.monotonic()
 
-            if now - last_telemetry >= settings.telemetry_interval_seconds:
+            if now - last_telemetry >= power_manager.telemetry_interval_seconds:
                 reading: PowerReading | None = None
                 if power is not None:
                     try:
                         reading = power.read()
                     except Exception as e:
                         log.warning("power_read_error", error=str(e))
-                telemetry.publish_heartbeat(power=reading)
+
+                if reading is not None:
+                    power_manager.update(reading.soc_pct)
+                    if not power_manager.camera_enabled:
+                        camera.standby()
+
+                telemetry.publish_heartbeat(
+                    power=reading,
+                    power_mode=power_manager.mode.value,
+                )
                 last_telemetry = now
 
             # PIR motion detection will be wired here once the sensor is added.

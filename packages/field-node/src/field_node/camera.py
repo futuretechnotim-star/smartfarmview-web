@@ -20,8 +20,28 @@ class Camera:
         )
         self._cam.configure(capture_config)
         self._cam.start()
+        self._active = True
         Path(settings.capture_dir).mkdir(parents=True, exist_ok=True)
         log.info("camera_ready", width=settings.capture_width, height=settings.capture_height)
+
+    @property
+    def is_active(self) -> bool:
+        return self._active
+
+    def standby(self) -> None:
+        """Stop the sensor to save ~100 mA; config is preserved for fast wakeup."""
+        if self._active:
+            self._cam.stop()
+            self._active = False
+            log.info("camera_standby")
+
+    def wakeup(self) -> None:
+        """Restart sensor and wait for stabilisation before capture."""
+        if not self._active:
+            self._cam.start()
+            time.sleep(2)
+            self._active = True
+            log.info("camera_wakeup")
 
     def capture_still(self) -> Path:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -51,5 +71,6 @@ class Camera:
         return path
 
     def close(self) -> None:
-        self._cam.stop()
+        if self._active:
+            self._cam.stop()
         self._cam.close()

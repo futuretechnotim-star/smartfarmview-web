@@ -232,6 +232,18 @@ class TelemetryPublisher:
                 },
             ),
             (
+                "sensor",
+                "power_mode",
+                {
+                    "name": "Power Mode",
+                    "unique_id": f"{node}_power_mode",
+                    "state_topic": telemetry_topic,
+                    "value_template": "{{ value_json.power_mode | default('unknown') }}",
+                    "icon": "mdi:battery-heart-variant",
+                    "device": device,
+                },
+            ),
+            (
                 "camera",
                 "snapshot",
                 {
@@ -260,7 +272,11 @@ class TelemetryPublisher:
             self._publish_raw(topic, config, retain=True)
             log.info("discovery_published", component=component, object_id=object_id)
 
-    def publish_heartbeat(self, power: "PowerReading | None" = None) -> None:
+    def publish_heartbeat(
+        self,
+        power: "PowerReading | None" = None,
+        power_mode: str | None = None,
+    ) -> None:
         payload: dict[str, object] = {
             "ts": time.time(),
             "cpu_temp": _cpu_temp(),
@@ -275,6 +291,8 @@ class TelemetryPublisher:
             runtime = power.runtime_hours(settings.battery_capacity_mah)
             if runtime is not None:
                 payload["battery_runtime_hours"] = runtime
+        if power_mode is not None:
+            payload["power_mode"] = power_mode
         self.publish("telemetry", payload)
 
     def publish_motion_event(self, snapshot_path: str) -> None:
