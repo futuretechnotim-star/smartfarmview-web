@@ -1,0 +1,9 @@
+{
+  "nodes": [
+    {
+      "id": "landplanmesh1",
+      "ip": "100.70.1.11",
+      "description": "Field node #1 — initial prototype"
+    }
+  ]
+}

@@ -5,23 +5,43 @@ on:
     branches: [main]
     paths:
       - "packages/field-node/**"
+      - "infra/nodes.json"
   workflow_dispatch:
     inputs:
-      target_host:
-        description: "SSH target (user@host)"
-        default: "techno@100.70.1.11"
+      node_id:
+        description: "Deploy to a specific node ID (leave blank for all nodes)"
         required: false
-
-env:
-  TARGET: ${{ github.event.inputs.target_host || 'techno@100.70.1.11' }}
-  DEPLOY_PATH: /opt/field-node
+        default: ""
 
 jobs:
-  deploy:
+  # Read infra/nodes.json and build the matrix, optionally filtering to one node.
+  load-matrix:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/field-node
+    outputs:
+      nodes: ${{ steps.filter.outputs.nodes }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build node matrix
+        id: filter
+        run: |
+          NODE_ID="${{ github.event.inputs.node_id }}"
+          if [ -n "$NODE_ID" ]; then
+            NODES=$(jq -c "[.nodes[] | select(.id == \"$NODE_ID\")]" infra/nodes.json)
+          else
+            NODES=$(jq -c '.nodes' infra/nodes.json)
+          fi
+          echo "nodes=$NODES" >> $GITHUB_OUTPUT
+
+  deploy:
+    needs: load-matrix
+    if: ${{ needs.load-matrix.outputs.nodes != '[]' }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false   # keep deploying other nodes if one fails
+      matrix:
+        node: ${{ fromJson(needs.load-matrix.outputs.nodes) }}
+    name: "Deploy → ${{ matrix.node.id }}"
 
     steps:
       - uses: actions/checkout@v4
@@ -33,16 +53,16 @@ jobs:
           oauth-secret: ${{ secrets.TAILSCALE_OAUTH_SECRET }}
           tags: tag:ci
 
-      - name: Set up SSH key
+      - name: Set up SSH
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.PI_SSH_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          echo "${{ secrets.PI_SSH_KNOWN_HOST }}" >> ~/.ssh/known_hosts
+          ssh-keyscan -H ${{ matrix.node.ip }} >> ~/.ssh/known_hosts 2>/dev/null || true
 
-      - name: Sync code to Pi
+      - name: Sync code
         run: |
-          rsync -avz --delete \
+          rsync -az --delete \
             --exclude='.git' \
             --exclude='tests/' \
             --exclude='*.pyc' \
@@ -51,20 +71,30 @@ jobs:
             --exclude='*.egg-info' \
             --exclude='captures/' \
             --exclude='.env' \
-            -e "ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new" \
-            ./ ${{ env.TARGET }}:${{ env.DEPLOY_PATH }}/
+            -e "ssh -i ~/.ssh/deploy_key" \
+            packages/field-node/ \
+            techno@${{ matrix.node.ip }}:/opt/field-node/
 
-      - name: Install dependencies on Pi
+      # Run pi-setup.sh on every deploy — it's idempotent and skips apt when
+      # packages are already installed, so re-runs are fast (~5s).
+      # This ensures new apt packages, sudoers rules, and system config are
+      # applied automatically without manual SSH.
+      - name: Run provisioning (idempotent)
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new ${{ env.TARGET }} \
-            "cd ${{ env.DEPLOY_PATH }} && .venv/bin/pip install -e '.[hardware]' --quiet"
+          ssh -i ~/.ssh/deploy_key techno@${{ matrix.node.ip }} \
+            "sudo bash /opt/field-node/scripts/pi-setup.sh"
+
+      - name: Install Python dependencies
+        run: |
+          ssh -i ~/.ssh/deploy_key techno@${{ matrix.node.ip }} \
+            "/opt/field-node/.venv/bin/pip install -e '/opt/field-node/.[hardware]' --quiet"
 
       - name: Restart service
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new ${{ env.TARGET }} \
+          ssh -i ~/.ssh/deploy_key techno@${{ matrix.node.ip }} \
             "sudo systemctl restart field-node"
 
       - name: Health check
         run: |
-          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=accept-new ${{ env.TARGET }} \
-            "timeout 10 bash -c 'until systemctl is-active --quiet field-node; do sleep 1; done'"
+          ssh -i ~/.ssh/deploy_key techno@${{ matrix.node.ip }} \
+            "timeout 15 bash -c 'until systemctl is-active --quiet field-node; do sleep 1; done'"
