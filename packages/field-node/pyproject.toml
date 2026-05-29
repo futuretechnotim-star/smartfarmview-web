@@ -19,6 +19,7 @@ dependencies = [
 [project.optional-dependencies]
 hardware = [
     "picamera2>=0.3",
+    "gpiozero>=2.0",
 ]
 dev = [
     "pytest>=7.4",
@@ -27,6 +28,7 @@ dev = [
     "pytest-cov>=4.1",
     "ruff>=0.3",
     "mypy>=1.8",
+    "gpiozero>=2.0",
 ]
 
 [project.scripts]
@@ -56,5 +58,5 @@ strict = true
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["picamera2.*", "paho.*"]
+module = ["picamera2.*", "paho.*", "gpiozero.*"]
 ignore_missing_imports = true

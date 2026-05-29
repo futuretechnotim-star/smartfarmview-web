@@ -47,6 +47,16 @@ def test_publish_motion_event(publisher, mock_mqtt):
     assert any("/motion" in t for t in topics)
 
 
+def test_publish_motion_clear(publisher, mock_mqtt):
+    publisher.publish_motion_clear()
+    mock_mqtt.publish.assert_called_once()
+    topic, payload_str = mock_mqtt.publish.call_args[0][:2]
+    assert "/motion_state" in topic
+    import json
+
+    assert json.loads(payload_str) == "OFF"
+
+
 def test_discovery_publishes_all_entities(publisher, mock_mqtt):
     mock_mqtt.publish.reset_mock()
     publisher.publish_discovery()

@@ -1,10 +1,12 @@
 import signal
 import time
+from pathlib import Path
 
 import structlog
 
 from field_node.camera import Camera
 from field_node.config import settings
+from field_node.motion import PIRSensor
 from field_node.power.base import PowerMonitor, PowerReading
 from field_node.power.manager import PowerManager
 from field_node.telemetry import TelemetryPublisher
@@ -43,19 +45,34 @@ def main() -> None:
     camera = Camera()
     power = _load_power_monitor()
     power_manager = PowerManager()
+    pir = PIRSensor()
+    telemetry: TelemetryPublisher  # assigned below; closures capture it by name (late binding)
+
+    def _do_capture() -> Path | None:
+        """Capture a still, publish the snapshot, return the path. Returns None if blocked."""
+        if not power_manager.camera_enabled:
+            log.warning("capture_blocked", reason="critical_power_mode")
+            return None
+        camera.wakeup()
+        path = camera.capture_still()
+        if power_manager.camera_standby_between_captures:
+            camera.standby()
+        telemetry.publish_snapshot(path.read_bytes())
+        return path
+
+    def on_motion() -> None:
+        path = _do_capture()
+        if path is not None:
+            telemetry.publish_motion_event(str(path))
+
+    pir.on_motion = on_motion
+    pir.on_clear = lambda: telemetry.publish_motion_clear()
 
     def on_command(payload: dict[str, object]) -> None:
         cmd = payload.get("cmd")
         if cmd == "capture":
             log.info("capture_command_received")
-            if not power_manager.camera_enabled:
-                log.warning("capture_blocked", reason="critical_power_mode")
-                return
-            camera.wakeup()
-            path = camera.capture_still()
-            if power_manager.camera_standby_between_captures:
-                camera.standby()
-            telemetry.publish_snapshot(path.read_bytes())
+            _do_capture()
 
     telemetry = TelemetryPublisher(on_command=on_command)
     telemetry.connect()
@@ -85,10 +102,9 @@ def main() -> None:
                 )
                 last_telemetry = now
 
-            # PIR motion detection will be wired here once the sensor is added.
-
             time.sleep(1)
     finally:
+        pir.close()
         camera.close()
         if power is not None:
             power.close()

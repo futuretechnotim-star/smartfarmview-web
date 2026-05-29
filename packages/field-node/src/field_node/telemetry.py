@@ -305,6 +305,9 @@ class TelemetryPublisher:
             },
         )
 
+    def publish_motion_clear(self) -> None:
+        self.publish("motion_state", "OFF")
+
     def close(self) -> None:
         self._client.loop_stop()
         self._client.disconnect()

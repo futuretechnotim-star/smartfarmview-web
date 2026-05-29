@@ -18,7 +18,9 @@ sudo apt-get install -y \
     rpicam-apps \
     git \
     rsync \
-    wireless-tools
+    wireless-tools \
+    python3-lgpio \
+    python3-gpiozero
 
 echo "==> Phase 2: Enable I2C (required for INA219 power monitor)"
 sudo raspi-config nonint do_i2c 0

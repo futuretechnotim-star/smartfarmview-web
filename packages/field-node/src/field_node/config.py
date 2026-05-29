@@ -30,8 +30,9 @@ class Settings(BaseSettings):
     # Battery capacity in mAh — update when swapping batteries
     battery_capacity_mah: int = 1500
 
-    # PIR GPIO pin (BCM numbering) — not yet wired, reserved for future use
-    pir_gpio_pin: int = 17
+    # PIR sensor (HC-SR501) — GPIO pin in BCM numbering, physical pin 37
+    pir_gpio_pin: int = 26
+    pir_warmup_seconds: int = 60
 
 
 settings = Settings()
