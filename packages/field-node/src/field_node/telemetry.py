@@ -104,6 +104,13 @@ class TelemetryPublisher:
             return
         self._client.publish(self._topic(key), json.dumps(payload), qos=1, retain=False)
 
+    def _publish_str(self, key: str, value: str) -> None:
+        """Publish a raw string payload (no JSON encoding) — required for HA binary_sensor payloads."""
+        if not self._connected:
+            log.warning("mqtt_not_connected_skipping", key=key)
+            return
+        self._client.publish(self._topic(key), value, qos=1, retain=False)
+
     def publish_snapshot(self, jpeg_bytes: bytes) -> None:
         if not self._connected:
             log.warning("mqtt_not_connected_skipping", key="snapshot")
@@ -296,7 +303,7 @@ class TelemetryPublisher:
         self.publish("telemetry", payload)
 
     def publish_motion_event(self, snapshot_path: str) -> None:
-        self.publish("motion_state", "ON")
+        self._publish_str("motion_state", "ON")
         self.publish(
             "motion",
             {
@@ -306,7 +313,7 @@ class TelemetryPublisher:
         )
 
     def publish_motion_clear(self) -> None:
-        self.publish("motion_state", "OFF")
+        self._publish_str("motion_state", "OFF")
 
     def close(self) -> None:
         self._client.loop_stop()
