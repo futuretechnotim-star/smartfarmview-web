@@ -34,5 +34,11 @@ class Settings(BaseSettings):
     pir_gpio_pin: int = 26
     pir_warmup_seconds: int = 60
 
+    # Solar-aware power management
+    solar_day_start_hour: int = 7  # local 24h hour when solar generation begins
+    solar_day_end_hour: int = 20  # local 24h hour when solar generation ends
+    solar_min_overnight_soc: int = 30  # minimum SoC % needed at day_end to run through the night
+    solar_current_avg_minutes: int = 30  # rolling window for net current average
+
 
 settings = Settings()

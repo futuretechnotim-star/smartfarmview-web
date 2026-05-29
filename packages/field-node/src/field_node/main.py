@@ -92,13 +92,14 @@ def main() -> None:
                         log.warning("power_read_error", error=str(e))
 
                 if reading is not None:
-                    power_manager.update(reading.soc_pct)
+                    power_manager.update(reading.soc_pct, reading.current_ma)
                     if not power_manager.camera_enabled:
                         camera.standby()
 
                 telemetry.publish_heartbeat(
                     power=reading,
                     power_mode=power_manager.mode.value,
+                    solar_status=power_manager.solar_status,
                 )
                 last_telemetry = now
 

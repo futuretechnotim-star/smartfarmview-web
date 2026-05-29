@@ -12,6 +12,7 @@ from field_node.config import settings
 
 if TYPE_CHECKING:
     from field_node.power.base import PowerReading
+    from field_node.power.manager import SolarStatus
 
 log = structlog.get_logger()
 
@@ -272,6 +273,49 @@ class TelemetryPublisher:
                     "device": device,
                 },
             ),
+            (
+                "sensor",
+                "solar_net_avg_ma",
+                {
+                    "name": "Solar Net Current",
+                    "unique_id": f"{node}_solar_net_avg_ma",
+                    "state_topic": telemetry_topic,
+                    "value_template": "{{ value_json.solar_net_avg_ma | default('unavailable') }}",
+                    "unit_of_measurement": "mA",
+                    "device_class": "current",
+                    "state_class": "measurement",
+                    "icon": "mdi:solar-power",
+                    "device": device,
+                },
+            ),
+            (
+                "sensor",
+                "solar_projected_eod_soc",
+                {
+                    "name": "Solar Projected EOD SoC",
+                    "unique_id": f"{node}_solar_projected_eod_soc",
+                    "state_topic": telemetry_topic,
+                    "value_template": "{{ value_json.solar_projected_eod_soc | default('unavailable') }}",
+                    "unit_of_measurement": "%",
+                    "icon": "mdi:battery-clock-outline",
+                    "state_class": "measurement",
+                    "device": device,
+                },
+            ),
+            (
+                "sensor",
+                "solar_deficit_pct",
+                {
+                    "name": "Solar Overnight Deficit",
+                    "unique_id": f"{node}_solar_deficit_pct",
+                    "state_topic": telemetry_topic,
+                    "value_template": "{{ value_json.solar_deficit_pct | default('unavailable') }}",
+                    "unit_of_measurement": "%",
+                    "icon": "mdi:battery-alert-variant-outline",
+                    "state_class": "measurement",
+                    "device": device,
+                },
+            ),
         ]
 
         for component, object_id, config in entities:
@@ -283,6 +327,7 @@ class TelemetryPublisher:
         self,
         power: "PowerReading | None" = None,
         power_mode: str | None = None,
+        solar_status: "SolarStatus | None" = None,
     ) -> None:
         payload: dict[str, object] = {
             "ts": time.time(),
@@ -300,6 +345,14 @@ class TelemetryPublisher:
                 payload["battery_runtime_hours"] = runtime
         if power_mode is not None:
             payload["power_mode"] = power_mode
+        if solar_status is not None and solar_status.is_daytime:
+            if solar_status.net_avg_ma is not None:
+                payload["solar_net_avg_ma"] = solar_status.net_avg_ma
+            if solar_status.projected_eod_soc is not None:
+                payload["solar_projected_eod_soc"] = solar_status.projected_eod_soc
+            if solar_status.deficit_pct is not None:
+                payload["solar_deficit_pct"] = solar_status.deficit_pct
+            payload["mode_reason"] = solar_status.mode_reason
         self.publish("telemetry", payload)
 
     def publish_motion_event(self, snapshot_path: str) -> None:
