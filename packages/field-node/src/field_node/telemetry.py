@@ -11,6 +11,7 @@ import structlog
 from field_node.config import settings
 
 if TYPE_CHECKING:
+    from field_node.detector import Detection
     from field_node.power.base import PowerReading
     from field_node.power.manager import SolarStatus
 
@@ -125,6 +126,7 @@ class TelemetryPublisher:
         motion_state_topic = self._topic("motion_state")
         snapshot_topic = self._topic("snapshot")
         cmd_topic = self._topic("cmd")
+        detection_topic = self._topic("detection")
         device = _device_info()
 
         entities: list[tuple[str, str, dict[str, object]]] = [
@@ -311,6 +313,20 @@ class TelemetryPublisher:
                     "device": device,
                 },
             ),
+            (
+                "sensor",
+                "last_detection",
+                {
+                    "name": "Last Detection",
+                    "unique_id": f"{node}_last_detection",
+                    "state_topic": detection_topic,
+                    "value_template": "{{ value_json.summary }}",
+                    "icon": "mdi:motion-sensor",
+                    "json_attributes_topic": detection_topic,
+                    "json_attributes_template": "{{ value_json | tojson }}",
+                    "device": device,
+                },
+            ),
         ]
 
         for component, object_id, config in entities:
@@ -349,6 +365,28 @@ class TelemetryPublisher:
                 payload["solar_deficit_pct"] = solar_status.deficit_pct
             payload["mode_reason"] = solar_status.mode_reason
         self.publish("telemetry", payload)
+
+    def publish_detection(self, detections: "list[Detection]", inference_ms: int = 0) -> None:
+        """Publish object detection results tagged to the most recent snapshot."""
+        summary_parts = [f"{d.label} ({d.confidence:.0%})" for d in detections[:3]]
+        payload = {
+            "ts": time.time(),
+            "summary": ", ".join(summary_parts),
+            "inference_ms": inference_ms,
+            "objects": [
+                {
+                    "label": d.label,
+                    "confidence": d.confidence,
+                    "bbox": list(d.bbox),
+                }
+                for d in detections
+            ],
+        }
+        if not self._connected:
+            log.warning("mqtt_not_connected_skipping", key="detection")
+            return
+        self._client.publish(self._topic("detection"), json.dumps(payload), qos=1, retain=True)
+        log.info("detection_published", summary=payload["summary"], inference_ms=inference_ms)
 
     def publish_motion_event(self, snapshot_path: str) -> None:
         self._publish_str("motion_state", "ON")

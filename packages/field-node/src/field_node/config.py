@@ -40,6 +40,11 @@ class Settings(BaseSettings):
     # minimum gap between consecutive on_motion callbacks (prevents rapid re-triggering)
     pir_cooldown_seconds: float = 10.0
 
+    # Object detector (TFLite COCO SSD MobileNet V1)
+    detector_model_path: str = "/opt/field-node/models/detect.tflite"
+    detector_labels_path: str = "/opt/field-node/models/labelmap.txt"
+    detector_min_confidence: float = 0.5  # 0.0–1.0; raise to reduce false positives
+
     # Solar-aware power management
     solar_day_start_hour: int = 7  # local 24h hour when solar generation begins
     solar_day_end_hour: int = 20  # local 24h hour when solar generation ends

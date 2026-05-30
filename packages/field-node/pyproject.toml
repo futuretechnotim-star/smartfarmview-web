@@ -20,6 +20,10 @@ dependencies = [
 hardware = [
     "picamera2>=0.3",
     "gpiozero>=2.0",
+    # TFLite inference — ai-edge-litert is the current package name (replaces tflite-runtime)
+    "ai-edge-litert>=1.0",
+    "pillow>=10.0",
+    "numpy>=1.24",
 ]
 dev = [
     "pytest>=7.4",

@@ -124,6 +124,26 @@ echo "==> Phase 8: Verify camera"
 # ---------------------------------------------------------------------------
 rpicam-hello --list-cameras 2>&1 || echo "  WARNING: camera not detected — check cable and config.txt"
 
+# ---------------------------------------------------------------------------
+echo "==> Phase 9: Object detection model (COCO SSD MobileNet V1 INT8)"
+# ---------------------------------------------------------------------------
+MODEL_DIR="$DEPLOY_PATH/models"
+MODEL_FILE="$MODEL_DIR/detect.tflite"
+LABELS_FILE="$MODEL_DIR/labelmap.txt"
+MODEL_URL="https://storage.googleapis.com/download.tensorflow.org/models/tflite/coco_ssd_mobilenet_v1_1.0_quant_2018_06_29.zip"
+
+mkdir -p "$MODEL_DIR"
+
+if [ ! -f "$MODEL_FILE" ] || [ ! -f "$LABELS_FILE" ]; then
+    echo "  Downloading COCO SSD MobileNet V1 model (~4 MB)..."
+    wget -q "$MODEL_URL" -O /tmp/field_node_model.zip
+    unzip -qo /tmp/field_node_model.zip detect.tflite labelmap.txt -d "$MODEL_DIR"
+    rm -f /tmp/field_node_model.zip
+    echo "  Model downloaded to $MODEL_DIR"
+else
+    echo "  Model already present — skipping download"
+fi
+
 echo ""
 echo "==> Setup complete!"
 echo "  Node: $(hostname)"
