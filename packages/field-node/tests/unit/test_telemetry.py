@@ -52,15 +52,13 @@ def test_publish_motion_clear(publisher, mock_mqtt):
     mock_mqtt.publish.assert_called_once()
     topic, payload_str = mock_mqtt.publish.call_args[0][:2]
     assert "/motion_state" in topic
-    import json
-
-    assert json.loads(payload_str) == "OFF"
+    assert payload_str == "OFF"
 
 
 def test_discovery_publishes_all_entities(publisher, mock_mqtt):
     mock_mqtt.publish.reset_mock()
     publisher.publish_discovery()
-    assert mock_mqtt.publish.call_count == 11
+    assert mock_mqtt.publish.call_count == 14
     topics = [c[0][0] for c in mock_mqtt.publish.call_args_list]
     assert any("cpu_temp" in t for t in topics)
     assert any("storage_pct" in t for t in topics)
@@ -73,6 +71,9 @@ def test_discovery_publishes_all_entities(publisher, mock_mqtt):
     assert any("power_mode" in t for t in topics)
     assert any("snapshot" in t for t in topics)
     assert any("capture" in t for t in topics)
+    assert any("solar_net_avg_ma" in t for t in topics)
+    assert any("solar_projected_eod_soc" in t for t in topics)
+    assert any("solar_deficit_pct" in t for t in topics)
 
 
 def test_publish_snapshot(publisher, mock_mqtt):

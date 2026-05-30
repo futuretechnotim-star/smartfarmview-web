@@ -7,8 +7,15 @@ from field_node.power.manager import PowerManager, PowerMode
 
 @pytest.fixture
 def pm():
-    """PowerManager with system calls patched out."""
-    with patch("field_node.power.manager._apply_mode"):
+    """PowerManager with system calls and solar daytime check patched out.
+
+    Forcing nighttime isolates SoC-based behaviour from solar projection logic,
+    which is time-of-day dependent and tested separately in TestSolarMode.
+    """
+    with (
+        patch("field_node.power.manager._apply_mode"),
+        patch.object(PowerManager, "_is_daytime", return_value=False),
+    ):
         yield PowerManager()
 
 
@@ -101,10 +108,10 @@ class TestProperties:
             pm.update(39)
         assert pm.camera_standby_between_captures is True
 
-    def test_camera_standby_not_in_eco(self, pm: PowerManager) -> None:
+    def test_camera_standby_in_eco(self, pm: PowerManager) -> None:
         with patch("field_node.power.manager._apply_mode"):
             pm.update(59)
-        assert pm.camera_standby_between_captures is False
+        assert pm.camera_standby_between_captures is True
 
     def test_telemetry_interval_normal(self, pm: PowerManager) -> None:
         assert pm.telemetry_interval_seconds == 60  # settings default

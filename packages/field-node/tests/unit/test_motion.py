@@ -1,7 +1,9 @@
+import time
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from field_node.config import settings
 from field_node.motion import PIRSensor
 
 
@@ -21,6 +23,13 @@ def pir(mock_hw: MagicMock) -> PIRSensor:
     sensor.close()
 
 
+@pytest.fixture
+def ready_pir(pir: PIRSensor) -> PIRSensor:
+    """PIR sensor past its warm-up phase."""
+    pir._warmup_complete()
+    return pir
+
+
 class TestInit:
     def test_starts_warming_up(self, pir: PIRSensor) -> None:
         assert pir.is_warming_up is True
@@ -37,15 +46,16 @@ class TestInit:
             mock_cls.return_value.motion_detected = False
             pir = PIRSensor(pin=17)
             pir.close()
-            mock_cls.assert_called_once_with(17)
+            mock_cls.assert_called_once_with(17, queue_len=settings.pir_queue_len)
 
     def test_uses_settings_pin_when_none_given(self) -> None:
         with patch("field_node.motion.MotionSensor") as mock_cls:
             mock_cls.return_value.motion_detected = False
             pir = PIRSensor()
             pir.close()
-            # settings.pir_gpio_pin default is 26
-            mock_cls.assert_called_once_with(26)
+            mock_cls.assert_called_once_with(
+                settings.pir_gpio_pin, queue_len=settings.pir_queue_len
+            )
 
 
 class TestWarmup:
@@ -70,46 +80,122 @@ class TestWarmup:
         assert pir.last_detected_at is None
 
 
-class TestMotionAfterWarmup:
-    def test_on_motion_callback_called(self, pir: PIRSensor) -> None:
-        pir._warmup_complete()
+class TestMinDurationFilter:
+    def test_handle_motion_does_not_immediately_fire_callback(self, ready_pir: PIRSensor) -> None:
         cb = MagicMock()
-        pir.on_motion = cb
-        pir._handle_motion()
-        cb.assert_called_once()
+        ready_pir.on_motion = cb
+        ready_pir._handle_motion()
+        cb.assert_not_called()
 
-    def test_on_clear_callback_called(self, pir: PIRSensor) -> None:
-        pir._warmup_complete()
+    def test_confirm_motion_fires_callback_when_pin_still_high(
+        self, ready_pir: PIRSensor, mock_hw: MagicMock
+    ) -> None:
         cb = MagicMock()
-        pir.on_clear = cb
-        pir._handle_clear()
-        cb.assert_called_once()
-
-    def test_last_detected_at_set_on_motion(self, pir: PIRSensor) -> None:
-        pir._warmup_complete()
-        pir._handle_motion()
-        assert pir.last_detected_at is not None
-
-    def test_last_detected_at_not_updated_on_clear(self, pir: PIRSensor) -> None:
-        pir._warmup_complete()
-        pir._handle_clear()
-        assert pir.last_detected_at is None
-
-    def test_is_detected_reflects_hardware_state(self, pir: PIRSensor, mock_hw: MagicMock) -> None:
+        ready_pir.on_motion = cb
         mock_hw.motion_detected = True
-        assert pir.is_detected is True
+        ready_pir._confirm_motion()
+        cb.assert_called_once()
+
+    def test_confirm_motion_discards_when_pin_cleared(
+        self, ready_pir: PIRSensor, mock_hw: MagicMock
+    ) -> None:
+        cb = MagicMock()
+        ready_pir.on_motion = cb
         mock_hw.motion_detected = False
-        assert pir.is_detected is False
+        ready_pir._confirm_motion()
+        cb.assert_not_called()
 
-    def test_no_callback_set_does_not_raise(self, pir: PIRSensor) -> None:
-        pir._warmup_complete()
-        pir._handle_motion()  # on_motion is None — should not raise
-        pir._handle_clear()  # on_clear is None — should not raise
+    def test_last_detected_at_set_on_confirmed_motion(
+        self, ready_pir: PIRSensor, mock_hw: MagicMock
+    ) -> None:
+        mock_hw.motion_detected = True
+        ready_pir._confirm_motion()
+        assert ready_pir.last_detected_at is not None
 
-    def test_callback_exception_does_not_propagate(self, pir: PIRSensor) -> None:
-        pir._warmup_complete()
-        pir.on_motion = MagicMock(side_effect=RuntimeError("boom"))
-        pir._handle_motion()  # should not raise
+    def test_last_detected_at_not_set_when_pin_cleared(
+        self, ready_pir: PIRSensor, mock_hw: MagicMock
+    ) -> None:
+        mock_hw.motion_detected = False
+        ready_pir._confirm_motion()
+        assert ready_pir.last_detected_at is None
+
+    def test_handle_clear_before_timer_cancels_without_callback(
+        self, ready_pir: PIRSensor, mock_hw: MagicMock
+    ) -> None:
+        """Pin goes LOW before min_duration elapses — no callback should fire."""
+        motion_cb = MagicMock()
+        clear_cb = MagicMock()
+        ready_pir.on_motion = motion_cb
+        ready_pir.on_clear = clear_cb
+        ready_pir._handle_motion()
+        ready_pir._handle_clear()
+        motion_cb.assert_not_called()
+        clear_cb.assert_not_called()
+
+
+class TestCooldown:
+    def test_confirm_motion_respects_cooldown(
+        self, ready_pir: PIRSensor, mock_hw: MagicMock
+    ) -> None:
+        cb = MagicMock()
+        ready_pir.on_motion = cb
+        mock_hw.motion_detected = True
+        ready_pir._confirm_motion()
+        assert cb.call_count == 1
+        # Second call within cooldown window should be suppressed
+        ready_pir._confirm_motion()
+        assert cb.call_count == 1
+
+    def test_confirm_motion_fires_after_cooldown_elapsed(
+        self, ready_pir: PIRSensor, mock_hw: MagicMock
+    ) -> None:
+        cb = MagicMock()
+        ready_pir.on_motion = cb
+        mock_hw.motion_detected = True
+        ready_pir._confirm_motion()
+        # Manually expire the cooldown
+        ready_pir._last_fired_at = time.time() - settings.pir_cooldown_seconds - 1
+        ready_pir._motion_active = False
+        ready_pir._confirm_motion()
+        assert cb.call_count == 2
+
+
+class TestClearCallback:
+    def test_on_clear_fires_after_confirmed_motion(
+        self, ready_pir: PIRSensor, mock_hw: MagicMock
+    ) -> None:
+        clear_cb = MagicMock()
+        ready_pir.on_clear = clear_cb
+        mock_hw.motion_detected = True
+        ready_pir._confirm_motion()
+        ready_pir._handle_clear()
+        clear_cb.assert_called_once()
+
+    def test_on_clear_does_not_fire_without_prior_motion(self, ready_pir: PIRSensor) -> None:
+        cb = MagicMock()
+        ready_pir.on_clear = cb
+        ready_pir._handle_clear()
+        cb.assert_not_called()
+
+    def test_is_detected_reflects_hardware_state(
+        self, ready_pir: PIRSensor, mock_hw: MagicMock
+    ) -> None:
+        mock_hw.motion_detected = True
+        assert ready_pir.is_detected is True
+        mock_hw.motion_detected = False
+        assert ready_pir.is_detected is False
+
+    def test_no_callback_set_does_not_raise(self, ready_pir: PIRSensor, mock_hw: MagicMock) -> None:
+        mock_hw.motion_detected = True
+        ready_pir._confirm_motion()
+        ready_pir._handle_clear()
+
+    def test_callback_exception_does_not_propagate(
+        self, ready_pir: PIRSensor, mock_hw: MagicMock
+    ) -> None:
+        ready_pir.on_motion = MagicMock(side_effect=RuntimeError("boom"))
+        mock_hw.motion_detected = True
+        ready_pir._confirm_motion()  # should not raise
 
 
 class TestClose:
@@ -123,3 +209,11 @@ class TestClose:
         with patch.object(pir._warmup_timer, "cancel") as mock_cancel:
             pir.close()
         mock_cancel.assert_called_once()
+
+    def test_close_cancels_pending_motion_timer(self, mock_hw: MagicMock) -> None:
+        pir = PIRSensor(pin=26)
+        pir._warmup_complete()
+        pir._handle_motion()
+        assert pir._pending_timer is not None
+        pir.close()
+        assert pir._pending_timer is None

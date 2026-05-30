@@ -33,6 +33,12 @@ class Settings(BaseSettings):
     # PIR sensor (HC-SR501) — GPIO pin in BCM numbering, physical pin 37
     pir_gpio_pin: int = 26
     pir_warmup_seconds: int = 60
+    # gpiozero SmoothedInputDevice queue depth — higher = less noise, more latency
+    pir_queue_len: int = 5
+    # pin must stay HIGH this long before on_motion fires (filters sub-second glitches)
+    pir_min_duration_seconds: float = 2.0
+    # minimum gap between consecutive on_motion callbacks (prevents rapid re-triggering)
+    pir_cooldown_seconds: float = 10.0
 
     # Solar-aware power management
     solar_day_start_hour: int = 7  # local 24h hour when solar generation begins
