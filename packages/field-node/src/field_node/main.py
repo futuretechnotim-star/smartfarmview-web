@@ -15,18 +15,34 @@ log = structlog.get_logger()
 _running = True
 
 
-def _load_power_monitor() -> PowerMonitor | None:
-    if settings.power_monitor == "ina219_hat":
-        try:
-            from field_node.power.ina219_hat import INA219HatMonitor
+_POWER_MONITOR_RETRY_SECONDS = 30
+_POWER_MONITOR_RETRY_INTERVAL = 2
 
+
+def _load_power_monitor() -> PowerMonitor | None:
+    if settings.power_monitor != "ina219_hat":
+        log.warning("power_monitor_unknown", driver=settings.power_monitor)
+        return None
+
+    from field_node.power.ina219_hat import INA219HatMonitor
+
+    deadline = time.monotonic() + _POWER_MONITOR_RETRY_SECONDS
+    attempt = 0
+    last_error = ""
+    while time.monotonic() < deadline:
+        attempt += 1
+        try:
             monitor = INA219HatMonitor()
-            log.info("power_monitor_ready", driver="ina219_hat")
+            log.info("power_monitor_ready", driver="ina219_hat", attempt=attempt)
             return monitor
         except Exception as e:
-            log.warning("power_monitor_unavailable", driver="ina219_hat", error=str(e))
-    else:
-        log.warning("power_monitor_unknown", driver=settings.power_monitor)
+            last_error = str(e)
+            log.info("power_monitor_waiting", attempt=attempt, error=last_error)
+            time.sleep(_POWER_MONITOR_RETRY_INTERVAL)
+
+    log.warning(
+        "power_monitor_unavailable", driver="ina219_hat", attempts=attempt, error=last_error
+    )
     return None
 
 
