@@ -103,7 +103,7 @@ class ObjectDetector:
         Results are sorted by confidence descending.
         """
         img = Image.open(io.BytesIO(jpeg_bytes)).convert("RGB")
-        img_resized = img.resize((self._input_w, self._input_h), Image.BILINEAR)
+        img_resized = img.resize((self._input_w, self._input_h), Image.Resampling.BILINEAR)
         input_array = np.expand_dims(np.array(img_resized, dtype=np.uint8), axis=0)
 
         self._interp.set_tensor(self._input_idx, input_array)  # type: ignore[attr-defined]

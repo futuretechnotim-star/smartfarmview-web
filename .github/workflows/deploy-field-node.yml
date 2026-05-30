@@ -71,6 +71,7 @@ jobs:
             --exclude='*.egg-info' \
             --exclude='captures/' \
             --exclude='.env' \
+            --exclude='models/' \
             -e "ssh -i ~/.ssh/deploy_key" \
             packages/field-node/ \
             techno@${{ matrix.node.ip }}:/opt/field-node/
