@@ -16,9 +16,10 @@ class Settings(BaseSettings):
     mqtt_password: str = ""
     mqtt_discovery_prefix: str = "homeassistant"
 
-    # Camera
-    capture_width: int = 1920
-    capture_height: int = 1080
+    # Camera — DORHEA B0036 160° FOV 5MP fisheye (CSI, OV5647)
+    # Native sensor resolution is 2592x1944 (4:3); fisheye fills the full frame at this ratio
+    capture_width: int = 2592
+    capture_height: int = 1944
     capture_dir: str = "/opt/field-node/captures"
 
     # Telemetry
