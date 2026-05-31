@@ -21,12 +21,9 @@ class Settings(BaseSettings):
     capture_width: int = 2592
     capture_height: int = 1944
     capture_dir: str = "/opt/field-node/captures"
-    # OV5647 IR compensation — the B0036 has no IR-cut filter so daylight images are pink.
-    # AWB is disabled and manual gains applied to knock back the red channel.
-    # Set camera_ir_compensation=false to re-enable AWB (e.g. after fitting an IR-cut filter).
-    camera_ir_compensation: bool = True
-    camera_colour_gain_r: float = 1.0   # reduce red (normal AWB red is ~1.5–2.0)
-    camera_colour_gain_b: float = 2.8   # boost blue to compensate
+    # 15fps keeps the OV5647 exposure window long enough for correct colour balance;
+    # higher framerates (≥30fps) force short exposures that cause a pink colour cast
+    camera_framerate: int = 15
 
     # Telemetry
     telemetry_interval_seconds: int = 60

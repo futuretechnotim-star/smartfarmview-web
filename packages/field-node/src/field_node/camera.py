@@ -15,18 +15,12 @@ log = structlog.get_logger()
 class Camera:
     def __init__(self) -> None:
         self._cam = Picamera2()
+        frame_duration_us = int(1_000_000 / settings.camera_framerate)
         capture_config = self._cam.create_still_configuration(
-            main={"size": (settings.capture_width, settings.capture_height)}
+            main={"size": (settings.capture_width, settings.capture_height)},
+            controls={"FrameDurationLimits": (frame_duration_us, frame_duration_us)},
         )
         self._cam.configure(capture_config)
-        if settings.camera_ir_compensation:
-            # Disable AWB and apply fixed gains to compensate for missing IR-cut filter.
-            # AWB cannot correct IR contamination because the sensor physically receives IR
-            # in the red channel; manual gains are the only software mitigation.
-            self._cam.set_controls({
-                "AwbEnable": False,
-                "ColourGains": (settings.camera_colour_gain_r, settings.camera_colour_gain_b),
-            })
         self._cam.start()
         self._active = True
         Path(settings.capture_dir).mkdir(parents=True, exist_ok=True)
@@ -34,7 +28,7 @@ class Camera:
             "camera_ready",
             width=settings.capture_width,
             height=settings.capture_height,
-            ir_compensation=settings.camera_ir_compensation,
+            framerate=settings.camera_framerate,
         )
 
     @property
@@ -66,8 +60,10 @@ class Camera:
     def capture_clip(self, duration_seconds: int = 10) -> Path:
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         path = Path(settings.capture_dir) / f"{settings.node_id}_{timestamp}.h264"
+        frame_duration_us = int(1_000_000 / settings.camera_framerate)
         video_config = self._cam.create_video_configuration(
-            main={"size": (settings.capture_width, settings.capture_height)}
+            main={"size": (settings.capture_width, settings.capture_height)},
+            controls={"FrameDurationLimits": (frame_duration_us, frame_duration_us)},
         )
         self._cam.switch_mode(video_config)
         encoder = H264Encoder()
@@ -77,7 +73,8 @@ class Camera:
         self._cam.stop_recording()
         self._cam.switch_mode(
             self._cam.create_still_configuration(
-                main={"size": (settings.capture_width, settings.capture_height)}
+                main={"size": (settings.capture_width, settings.capture_height)},
+                controls={"FrameDurationLimits": (frame_duration_us, frame_duration_us)},
             )
         )
         log.info("clip_captured", path=str(path), duration=duration_seconds)
