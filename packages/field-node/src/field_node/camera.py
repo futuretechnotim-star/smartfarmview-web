@@ -19,10 +19,23 @@ class Camera:
             main={"size": (settings.capture_width, settings.capture_height)}
         )
         self._cam.configure(capture_config)
+        if settings.camera_ir_compensation:
+            # Disable AWB and apply fixed gains to compensate for missing IR-cut filter.
+            # AWB cannot correct IR contamination because the sensor physically receives IR
+            # in the red channel; manual gains are the only software mitigation.
+            self._cam.set_controls({
+                "AwbEnable": False,
+                "ColourGains": (settings.camera_colour_gain_r, settings.camera_colour_gain_b),
+            })
         self._cam.start()
         self._active = True
         Path(settings.capture_dir).mkdir(parents=True, exist_ok=True)
-        log.info("camera_ready", width=settings.capture_width, height=settings.capture_height)
+        log.info(
+            "camera_ready",
+            width=settings.capture_width,
+            height=settings.capture_height,
+            ir_compensation=settings.camera_ir_compensation,
+        )
 
     @property
     def is_active(self) -> bool:
