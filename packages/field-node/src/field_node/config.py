@@ -55,9 +55,11 @@ class Settings(BaseSettings):
 
     # Detection history — hi-res image store.
     # detection_store_dir: where detection JPEGs are written. pi-setup.sh sets this
-    # automatically (in /opt/field-node/.env) to the mounted HA media share at
-    # /mnt/ha-media/<host>/landplan/<host> when ha_smb_host is configured; HA then
-    # serves them at {haBaseUrl}/media/local/landplan/<host>/{id}.jpg (Bearer auth).
+    # automatically (in /opt/field-node/.env) to /mnt/ha-media/landplan/<host> when
+    # ha_smb_host is configured (Samba `media` share mounted at /mnt/ha-media).
+    # HA then serves them at {haBaseUrl}/media/local/landplan/<host>/{id}.jpg (Bearer auth).
+    # imageFilename in detection events stores the full HA-media-relative path so the
+    # LandPlan API proxy doesn't need to reconstruct it.
     # Empty = disabled.
     detection_store_dir: str = ""
     # Number of detection events (and corresponding images) to keep.

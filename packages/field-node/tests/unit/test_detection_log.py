@@ -2,6 +2,7 @@
 
 import pytest
 
+from field_node.config import settings
 from field_node.main import (
     _delete_detection_image,
     _load_detection_log,
@@ -19,11 +20,13 @@ def reset_store_dir(tmp_path, monkeypatch):
 
 
 class TestStoreDetectionImage:
-    def test_writes_jpeg_and_returns_filename(self, tmp_path):
+    def test_writes_jpeg_and_returns_ha_relative_path(self, tmp_path):
         jpeg = b"\xff\xd8\xff\xe0" + b"\x00" * 50
-        filename = _store_detection_image("test-uuid-1234", jpeg)
-        assert filename == "test-uuid-1234.jpg"
-        assert (tmp_path / filename).read_bytes() == jpeg
+        # Returns the HA-media-relative path (so the LandPlan API can proxy it
+        # directly); the file itself is written as the bare {id}.jpg in the store.
+        result = _store_detection_image("test-uuid-1234", jpeg)
+        assert result == f"landplan/{settings.node_id}/test-uuid-1234.jpg"
+        assert (tmp_path / "test-uuid-1234.jpg").read_bytes() == jpeg
 
     def test_returns_none_when_store_dir_empty(self, monkeypatch):
         monkeypatch.setattr("field_node.main.settings.detection_store_dir", "")

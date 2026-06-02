@@ -113,15 +113,25 @@ def _store_dir() -> Path | None:
 
 
 def _store_detection_image(detection_id: str, jpeg_bytes: bytes) -> str | None:
-    """Write hi-res JPEG to detection store; return filename or None on failure."""
+    """Write hi-res JPEG to detection store.
+
+    Returns the HA media-relative path (landplan/{node_id}/{id}.jpg) so the
+    LandPlan API can proxy it via /media/local/{imageFilename} without
+    reconstructing the path from metadata.  Returns None on failure.
+
+    Convention: detection_store_dir must be {ha_media_mount}/landplan/{node_id},
+    e.g. /mnt/ha-media/landplan/LandPlanMesh1.  pi-setup.sh sets this automatically.
+    """
     store = _store_dir()
     if store is None:
         return None
     filename = f"{detection_id}.jpg"
+    # Relative path from the HA media share root — preserves node_id case.
+    ha_rel_path = f"landplan/{settings.node_id}/{filename}"
     try:
         (store / filename).write_bytes(jpeg_bytes)
-        log.info("detection_image_saved", filename=filename)
-        return filename
+        log.info("detection_image_saved", ha_rel_path=ha_rel_path)
+        return ha_rel_path
     except Exception as e:
         log.warning("detection_image_save_failed", error=str(e))
         return None

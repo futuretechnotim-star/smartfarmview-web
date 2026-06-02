@@ -45,7 +45,8 @@ def test_fstab_entry_added_once_then_not_duplicated(tmp_path: Path) -> None:
 
     cifs_lines = [ln for ln in fstab.read_text().splitlines() if "cifs" in ln]
     assert len(cifs_lines) == 1
-    assert str(tmp_path / "mnt" / "testnode") in cifs_lines[0]
+    # Share root is mounted at MNT_BASE itself (not a per-host subdir).
+    assert f" {tmp_path / 'mnt'} " in cifs_lines[0]
 
 
 def test_store_dir_set_when_absent(tmp_path: Path) -> None:
@@ -56,7 +57,7 @@ def test_store_dir_set_when_absent(tmp_path: Path) -> None:
 
     _invoke(fstab, env_file, tmp_path)
 
-    expected = tmp_path / "mnt" / "testnode" / "landplan" / "testnode"
+    expected = tmp_path / "mnt" / "landplan" / "testnode"
     content = env_file.read_text()
     assert f"FIELD_NODE_DETECTION_STORE_DIR={expected}" in content
 

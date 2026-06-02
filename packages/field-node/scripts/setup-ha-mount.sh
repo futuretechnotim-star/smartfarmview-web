@@ -12,10 +12,11 @@
 #   SKIP_PRIV   "1" skips apt/mkdir/chmod/mount (tests set "1")
 #   HOSTN       node hostname (default $(hostname))
 #
-# NOTE ON PATHS: we mount the `media` share ROOT at $MNT_BASE/<host> and store
-# images at $MNT_BASE/<host>/landplan/<host>. That lands files at HA's
+# NOTE ON PATHS: we mount the `media` share ROOT at /mnt/ha-media and store
+# images at /mnt/ha-media/landplan/<host>. That lands files at HA's
 # config/media/landplan/<host>/{id}.jpg, which HA serves at
 # /media/local/landplan/<host>/{id}.jpg — matching the LandPlan API image proxy.
+# (Shared team convention; the Pi creates the landplan/<host> subdir.)
 set -euo pipefail
 
 FSTAB="${FSTAB:-/etc/fstab}"
@@ -28,7 +29,9 @@ HOSTN="${HOSTN:-$(hostname)}"
 SMB_USER="${SMB_USER:-gateway-node}"
 SMB_PASS="${SMB_PASS:-gateway-node}"
 
-MOUNT_POINT="$MNT_BASE/$HOSTN"
+# Mount the `media` share root directly at /mnt/ha-media (shared mountpoint);
+# each node writes only under its own landplan/<host> subdir.
+MOUNT_POINT="$MNT_BASE"
 STORE_DIR="$MOUNT_POINT/landplan/$HOSTN"
 
 # --- cifs-utils + credentials file + mount point (privileged) --------------
