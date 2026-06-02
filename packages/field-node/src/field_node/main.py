@@ -1,5 +1,8 @@
+import datetime
+import json
 import signal
 import time
+import uuid
 from pathlib import Path
 
 import structlog
@@ -45,6 +48,20 @@ def _load_power_monitor() -> PowerMonitor | None:
     return None
 
 
+def _load_camera() -> Camera | None:
+    """Initialise the camera, returning None if it can't (e.g. sensor not detected).
+
+    A camera fault must not take the node dark: telemetry, power management and
+    PIR keep running, and `camera_ok=false` is reported so HA can surface the
+    degraded state (mirrors the power monitor's degraded mode in docs/power-hat.md).
+    """
+    try:
+        return Camera()
+    except Exception as e:
+        log.warning("camera_unavailable", error=str(e))
+        return None
+
+
 def _load_detector() -> "ObjectDetector | None":
     model_path = Path(settings.detector_model_path)
     labels_path = Path(settings.detector_labels_path)
@@ -79,21 +96,100 @@ except ImportError:
     ObjectDetector = None  # type: ignore[assignment,misc]
 
 
+_LOG_FILENAME = "detection_log.json"
+
+
+def _store_dir() -> Path | None:
+    """Return the detection store directory Path, or None if not configured or unwriteable."""
+    if not settings.detection_store_dir:
+        return None
+    p = Path(settings.detection_store_dir)
+    try:
+        p.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        log.warning("detection_store_dir_unavailable", path=str(p), error=str(e))
+        return None
+    return p
+
+
+def _store_detection_image(detection_id: str, jpeg_bytes: bytes) -> str | None:
+    """Write hi-res JPEG to detection store; return filename or None on failure."""
+    store = _store_dir()
+    if store is None:
+        return None
+    filename = f"{detection_id}.jpg"
+    try:
+        (store / filename).write_bytes(jpeg_bytes)
+        log.info("detection_image_saved", filename=filename)
+        return filename
+    except Exception as e:
+        log.warning("detection_image_save_failed", error=str(e))
+        return None
+
+
+def _delete_detection_image(event: dict[str, object]) -> None:
+    """Delete the image file for an evicted detection event."""
+    store = _store_dir()
+    filename = event.get("imageFilename")
+    if store is None or not filename:
+        return
+    try:
+        (store / str(filename)).unlink(missing_ok=True)
+    except Exception as e:
+        log.warning("detection_image_delete_failed", filename=filename, error=str(e))
+
+
+def _persist_detection_log(events: list[dict[str, object]]) -> None:
+    """Write the detection log to disk so it survives a Pi restart."""
+    store = _store_dir()
+    if store is None:
+        return
+    try:
+        (store / _LOG_FILENAME).write_text(json.dumps(events))
+    except Exception as e:
+        log.warning("detection_log_persist_failed", error=str(e))
+
+
+def _load_detection_log() -> list[dict[str, object]]:
+    """Load persisted detection log from disk on startup."""
+    store = _store_dir()
+    if store is None:
+        return []
+    log_file = store / _LOG_FILENAME
+    if not log_file.exists():
+        return []
+    try:
+        data = json.loads(log_file.read_text())
+        if isinstance(data, list):
+            log.info("detection_log_loaded", count=len(data))
+            return data
+    except Exception as e:
+        log.warning("detection_log_load_failed", error=str(e))
+    return []
+
+
 def main() -> None:
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
     log.info("field_node_starting", node_id=settings.node_id)
 
-    camera = Camera()
+    camera = _load_camera()
     power = _load_power_monitor()
     power_manager = PowerManager()
     detector = _load_detector()
     pir = PIRSensor()
     telemetry: TelemetryPublisher  # assigned below; closures capture by name (late binding)
 
+    # Rolling detection history — newest event at index 0.
+    # Loaded from disk on startup (if detection_store_dir is set) so history
+    # survives a Pi restart.
+    detection_log: list[dict[str, object]] = _load_detection_log()
+
     def _capture() -> tuple[Path, bytes] | None:
-        """Capture a still and return (path, jpeg_bytes). Returns None if power mode blocks it."""
+        """Capture a still and return (path, jpeg_bytes). Returns None if unavailable/blocked."""
+        if camera is None:
+            return None
         if not power_manager.camera_enabled:
             log.warning("capture_blocked", reason="critical_power_mode")
             return None
@@ -129,10 +225,32 @@ def main() -> None:
             log.info("motion_suppressed", reason="no_objects_detected")
             return
 
+        # Build and store detection log event.
+        detection_id = str(uuid.uuid4())
+        image_filename: str | None = _store_detection_image(detection_id, jpeg_bytes)
+        detected_at = datetime.datetime.now(tz=datetime.UTC).isoformat(timespec="seconds")
+        summary_parts = [f"{d.label} ({d.confidence:.0%})" for d in detections[:3]]
+        event: dict[str, object] = {
+            "id": detection_id,
+            "detectedAt": detected_at,
+            "summary": ", ".join(summary_parts) if summary_parts else "Motion detected",
+            "objects": [{"label": d.label, "confidence": d.confidence} for d in detections],
+            "imageFilename": image_filename,
+        }
+
+        # Evict oldest entry before prepending the new one.
+        if len(detection_log) >= settings.detection_store_count:
+            evicted = detection_log.pop()
+            _delete_detection_image(evicted)
+
+        detection_log.insert(0, event)
+        _persist_detection_log(detection_log)
+
         telemetry.publish_snapshot(jpeg_bytes)
         telemetry.publish_motion_event(str(path))
         if detections:
-            telemetry.publish_detection(detections, inference_ms=inference_ms)
+            telemetry.publish_detection(detections, inference_ms=inference_ms)  # legacy topic
+        telemetry.publish_detection_log(detection_log)
 
     pir.on_motion = on_motion
     pir.on_clear = lambda: telemetry.publish_motion_clear()
@@ -166,20 +284,22 @@ def main() -> None:
 
                 if reading is not None:
                     power_manager.update(reading.soc_pct, reading.current_ma)
-                    if not power_manager.camera_enabled:
+                    if not power_manager.camera_enabled and camera is not None:
                         camera.standby()
 
                 telemetry.publish_heartbeat(
                     power=reading,
                     power_mode=power_manager.mode.value,
                     solar_status=power_manager.solar_status,
+                    camera_ok=camera is not None,
                 )
                 last_telemetry = now
 
             time.sleep(1)
     finally:
         pir.close()
-        camera.close()
+        if camera is not None:
+            camera.close()
         if power is not None:
             power.close()
         telemetry.close()

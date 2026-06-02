@@ -127,6 +127,7 @@ class TelemetryPublisher:
         snapshot_topic = self._topic("snapshot")
         cmd_topic = self._topic("cmd")
         detection_topic = self._topic("detection")
+        detection_log_topic = self._topic("detection_log")
         device = _device_info()
 
         entities: list[tuple[str, str, dict[str, object]]] = [
@@ -327,6 +328,22 @@ class TelemetryPublisher:
                     "device": device,
                 },
             ),
+            (
+                "sensor",
+                "detection_log",
+                {
+                    "name": "Detection Log",
+                    "unique_id": f"{node}_detection_log",
+                    "state_topic": detection_log_topic,
+                    "value_template": "{{ value_json.state }}",
+                    "icon": "mdi:motion-sensor",
+                    # Expose the detections array as HA sensor attributes so LandPlan API
+                    # and the HACS integration can read the full history.
+                    "json_attributes_topic": detection_log_topic,
+                    "json_attributes_template": "{{ {'detections': value_json.detections} | tojson }}",
+                    "device": device,
+                },
+            ),
         ]
 
         for component, object_id, config in entities:
@@ -339,12 +356,15 @@ class TelemetryPublisher:
         power: "PowerReading | None" = None,
         power_mode: str | None = None,
         solar_status: "SolarStatus | None" = None,
+        camera_ok: bool | None = None,
     ) -> None:
         payload: dict[str, object] = {
             "ts": time.time(),
             "cpu_temp": _cpu_temp(),
             "storage_pct": _storage_percent(),
         }
+        if camera_ok is not None:
+            payload["camera_ok"] = camera_ok
         if power is not None:
             payload["battery_voltage"] = power.voltage_v
             payload["battery_current_ma"] = power.current_ma
@@ -387,6 +407,24 @@ class TelemetryPublisher:
             return
         self._client.publish(self._topic("detection"), json.dumps(payload), qos=1, retain=True)
         log.info("detection_published", summary=payload["summary"], inference_ms=inference_ms)
+
+    def publish_detection_log(self, events: list[dict[str, object]]) -> None:
+        """Publish the rolling detection history to HA.
+
+        Retained so HA has the full list immediately on reconnect.
+        HA stores it as sensor.{node_id}_detection_log attributes.detections —
+        the LandPlan API reads from there on GET /field-node/detections.
+        """
+        if not self._connected:
+            log.warning("mqtt_not_connected_skipping", key="detection_log")
+            return
+        count = len(events)
+        payload = {
+            "state": f"{count} detection{'s' if count != 1 else ''}",
+            "detections": events,
+        }
+        self._client.publish(self._topic("detection_log"), json.dumps(payload), qos=1, retain=True)
+        log.info("detection_log_published", count=count)
 
     def publish_motion_event(self, snapshot_path: str) -> None:
         self._publish_str("motion_state", "ON")

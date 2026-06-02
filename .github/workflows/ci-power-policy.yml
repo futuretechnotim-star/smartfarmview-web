@@ -1,0 +1,39 @@
+name: CI — power-policy
+
+on:
+  push:
+    paths:
+      - "packages/power-policy/**"
+  pull_request:
+    paths:
+      - "packages/power-policy/**"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/power-policy
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dev dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Lint (ruff)
+        run: ruff check src/ tests/
+
+      - name: Format check (ruff)
+        run: ruff format --check src/ tests/
+
+      - name: Type check (mypy)
+        run: mypy src/
+
+      - name: Unit tests
+        run: pytest tests/ -v --cov=power_policy --cov-report=term-missing

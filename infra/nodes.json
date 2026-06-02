@@ -2,8 +2,21 @@
   "nodes": [
     {
       "id": "landplanmesh1",
+      "type": "field-node",
       "ip": "100.70.1.11",
       "description": "Field node #1 — initial prototype"
+    },
+    {
+      "id": "gateway1",
+      "type": "gateway",
+      "ip": "",
+      "description": "Gateway node — Pi 5, HA + MQTT + mesh + SIM7600G-H uplink; Pico 2 W power controller. IP TBD once on the tailnet. Not deployed by the field-node workflow (see type filter)."
+    },
+    {
+      "id": "gateway1-pico",
+      "type": "pico",
+      "ip": "",
+      "description": "Pico 2 W watchdog for gateway1 — flashed via mpremote, reached over MQTT/mesh and Pi-proxied Tailscale (no native tailnet client). Not SSH-deployed."
     }
   ]
 }

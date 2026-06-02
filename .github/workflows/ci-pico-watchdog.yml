@@ -1,0 +1,41 @@
+name: CI — pico-watchdog
+
+on:
+  push:
+    paths:
+      - "packages/pico-watchdog/**"
+  pull_request:
+    paths:
+      - "packages/pico-watchdog/**"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: packages/pico-watchdog
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+
+      - name: Install dev tooling
+        run: pip install pytest ruff mypy
+
+      # Lint everything (ruff parses MicroPython modules fine), but type-check and
+      # test only the pure modules — the hardware glue runs on-device, not in CI.
+      - name: Lint (ruff)
+        run: ruff check firmware/ tests/
+
+      - name: Format check (ruff)
+        run: ruff format --check firmware/ tests/
+
+      - name: Type check (mypy, pure modules)
+        run: mypy firmware/gate_logic.py firmware/soc.py
+
+      - name: Unit tests
+        run: pytest tests/ -v

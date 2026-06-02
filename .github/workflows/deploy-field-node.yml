@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "packages/field-node/**"
+      - "packages/power-policy/**"
       - "infra/nodes.json"
   workflow_dispatch:
     inputs:
@@ -25,11 +26,13 @@ jobs:
       - name: Build node matrix
         id: filter
         run: |
+          # Only field nodes get the field-node deploy — the gateway and the
+          # Pico watchdog live in nodes.json too but are provisioned differently.
           NODE_ID="${{ github.event.inputs.node_id }}"
           if [ -n "$NODE_ID" ]; then
-            NODES=$(jq -c "[.nodes[] | select(.id == \"$NODE_ID\")]" infra/nodes.json)
+            NODES=$(jq -c "[.nodes[] | select(.id == \"$NODE_ID\" and .type == \"field-node\")]" infra/nodes.json)
           else
-            NODES=$(jq -c '.nodes' infra/nodes.json)
+            NODES=$(jq -c '[.nodes[] | select(.type == "field-node")]' infra/nodes.json)
           fi
           echo "nodes=$NODES" >> $GITHUB_OUTPUT
 
@@ -84,6 +87,29 @@ jobs:
         run: |
           ssh -i ~/.ssh/deploy_key techno@${{ matrix.node.ip }} \
             "sudo bash /opt/field-node/scripts/pi-setup.sh"
+
+      # Sync the shared lib AFTER provisioning: pi-setup.sh creates
+      # /opt/power-policy (techno-owned). /opt is root-owned, so rsync cannot
+      # create that directory itself on a fresh node.
+      - name: Sync shared power-policy lib
+        run: |
+          rsync -az --delete \
+            --exclude='.git' \
+            --exclude='tests/' \
+            --exclude='*.pyc' \
+            --exclude='__pycache__' \
+            --exclude='.venv/' \
+            --exclude='*.egg-info' \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            packages/power-policy/ \
+            techno@${{ matrix.node.ip }}:/opt/power-policy/
+
+      # Install the shared lib editable first so the field-node dependency on
+      # `smartfarmview-power-policy` resolves locally (it is not on PyPI).
+      - name: Install shared power-policy lib
+        run: |
+          ssh -i ~/.ssh/deploy_key techno@${{ matrix.node.ip }} \
+            "/opt/field-node/.venv/bin/pip install -e '/opt/power-policy' --quiet"
 
       - name: Install Python dependencies
         run: |

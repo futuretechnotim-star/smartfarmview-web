@@ -13,6 +13,9 @@ set -euo pipefail
 DEPLOY_PATH="/opt/field-node"
 VENV_PATH="$DEPLOY_PATH/.venv"
 CAPTURE_DIR="$DEPLOY_PATH/captures"
+# Shared power-policy lib lives outside $DEPLOY_PATH (it is not field-node-specific).
+# Must exist + be techno-owned before the deploy rsyncs into it (/opt is root-owned).
+POLICY_PATH="/opt/power-policy"
 
 # ---------------------------------------------------------------------------
 echo "==> Phase 1: OS prerequisites"
@@ -53,10 +56,10 @@ echo "==> Phase 3: User groups (video + i2c)"
 sudo usermod -aG video,i2c techno || true
 
 # ---------------------------------------------------------------------------
-echo "==> Phase 4: Create deploy and capture directories"
+echo "==> Phase 4: Create deploy, capture, and shared-lib directories"
 # ---------------------------------------------------------------------------
-sudo mkdir -p "$DEPLOY_PATH" "$CAPTURE_DIR"
-sudo chown -R techno:techno "$DEPLOY_PATH"
+sudo mkdir -p "$DEPLOY_PATH" "$CAPTURE_DIR" "$POLICY_PATH"
+sudo chown -R techno:techno "$DEPLOY_PATH" "$POLICY_PATH"
 
 # ---------------------------------------------------------------------------
 echo "==> Phase 5: Create Python venv"
@@ -120,9 +123,46 @@ sudo visudo -cf "$SUDOERS_FILE" && echo "  sudoers rules installed/updated" \
     || { echo "  ERROR: sudoers syntax check failed — file not applied"; exit 1; }
 
 # ---------------------------------------------------------------------------
-echo "==> Phase 8: Verify camera"
+echo "==> Phase 8: Camera sensor overlay (Arducam IMX519) + verify"
 # ---------------------------------------------------------------------------
-rpicam-hello --list-cameras 2>&1 || echo "  WARNING: camera not detected — check cable and config.txt"
+# The IMX519 is NOT auto-detected by libcamera (unlike the old OV5647) — it needs
+# an explicit device-tree overlay. This block is idempotent and only sets
+# CAMERA_CHANGED (→ one-time reboot at the end) when it actually edits config.txt.
+# If the overlay is absent from this OS image, install Arducam's kernel driver:
+#   https://github.com/ArduCAM/Arducam-Pivariety-V4L2-Driver  (-p imx519_kernel_driver)
+CONFIG_TXT="/boot/firmware/config.txt"
+[ -f "$CONFIG_TXT" ] || CONFIG_TXT="/boot/config.txt"
+CAMERA_OVERLAY="imx519"
+CAMERA_CHANGED=0
+
+if [ -f "$CONFIG_TXT" ]; then
+    # Auto-detect conflicts with a manual sensor overlay — turn it off.
+    if grep -qE '^camera_auto_detect=1' "$CONFIG_TXT"; then
+        sudo sed -i 's/^camera_auto_detect=1/camera_auto_detect=0/' "$CONFIG_TXT"
+        CAMERA_CHANGED=1; echo "  set camera_auto_detect=0"
+    elif ! grep -qE '^camera_auto_detect=' "$CONFIG_TXT"; then
+        echo 'camera_auto_detect=0' | sudo tee -a "$CONFIG_TXT" >/dev/null
+        CAMERA_CHANGED=1; echo "  added camera_auto_detect=0"
+    fi
+    if ! grep -qE "^dtoverlay=${CAMERA_OVERLAY}([,[:space:]]|$)" "$CONFIG_TXT"; then
+        echo "dtoverlay=${CAMERA_OVERLAY}" | sudo tee -a "$CONFIG_TXT" >/dev/null
+        CAMERA_CHANGED=1; echo "  added dtoverlay=${CAMERA_OVERLAY}"
+    fi
+    [ "$CAMERA_CHANGED" -eq 0 ] && echo "  camera overlay already configured"
+else
+    echo "  WARNING: config.txt not found — cannot configure camera overlay"
+fi
+
+# Verify (only meaningful once the overlay is active, i.e. after the reboot below).
+# Capture to a var first — piping rpicam into head triggers SIGPIPE under
+# `pipefail` and would emit a false "not detected" warning.
+CAM_OUT="$(rpicam-hello --list-cameras 2>&1 || true)"
+echo "$CAM_OUT" | head -8
+if echo "$CAM_OUT" | grep -q "$CAMERA_OVERLAY"; then
+    echo "  camera detected ($CAMERA_OVERLAY)"
+else
+    echo "  NOTE: $CAMERA_OVERLAY not detected yet — expected before the post-overlay reboot"
+fi
 
 # ---------------------------------------------------------------------------
 echo "==> Phase 9: Object detection model (COCO SSD MobileNet V1 INT8)"
@@ -151,3 +191,15 @@ echo ""
 echo "  First-time next steps (skip if this is a re-run):"
 echo "  1. Reboot to activate I2C:  sudo reboot"
 echo "  2. Add node to infra/nodes.json and push — all future updates are automatic"
+
+# ---------------------------------------------------------------------------
+# Reboot ONLY when the camera overlay changed this run (one-time, when the
+# sensor overlay is first introduced/altered). Steady-state re-runs make no
+# change and never reboot — so the GitHub Actions deploy is unaffected once the
+# overlay is in place. A loaded sensor overlay requires a reboot to take effect.
+# ---------------------------------------------------------------------------
+if [ "${CAMERA_CHANGED:-0}" -eq 1 ]; then
+    echo ""
+    echo "==> Camera overlay changed — rebooting now to load the sensor driver."
+    sudo reboot
+fi

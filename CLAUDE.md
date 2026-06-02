@@ -13,9 +13,13 @@ smartfarmview-web/
 ├── apps/
 │   └── web/                  # Web frontend (TBD: framework)
 ├── packages/
-│   └── <device-name>/        # Python packages, one per device type
+│   ├── power-policy/         # Shared pure power-budget policy lib (no hardware deps)
+│   ├── field-node/           # Pi Zero 2 W field node (camera, motion, telemetry)
+│   ├── gateway-node/         # Pi 5 gateway power brain (HA/MQTT/mesh host)
+│   └── pico-watchdog/        # Pico 2 W power controller firmware (MicroPython)
 ├── infra/
-│   └── tailscale/            # TailScale config / ACLs
+│   └── nodes.json            # Node registry (field-node deploy matrix filters by `type`)
+├── docs/                     # gateway-node.md, pico-watchdog.md, SecurityMesh.md, …
 ├── CLAUDE.md
 └── README.md
 ```
@@ -73,7 +77,12 @@ CI runs all four steps and will reject the push if any fail. Run them locally to
 
 - Python: follow PEP 8; use `ruff` for linting and `black` for formatting
 - TypeScript/JS: TBD once web stack is chosen
-- Keep device packages independent — no cross-package imports
+- Keep device packages independent — no imports between device packages. Shared
+  logic goes in a dedicated hardware-agnostic library package instead:
+  `packages/power-policy/` (`smartfarmview-power-policy`) holds the power-budget
+  state machine imported by both `field-node` and `gateway-node`. CI/deploy
+  install such libs editable first (`pip install -e ../power-policy`) so the
+  dependency resolves locally (they are not published to PyPI).
 - All inter-device communication goes over TailScale; never assume LAN routing
 
 ## Environment Variables

@@ -58,7 +58,7 @@ def test_publish_motion_clear(publisher, mock_mqtt):
 def test_discovery_publishes_all_entities(publisher, mock_mqtt):
     mock_mqtt.publish.reset_mock()
     publisher.publish_discovery()
-    assert mock_mqtt.publish.call_count == 15
+    assert mock_mqtt.publish.call_count == 16
     topics = [c[0][0] for c in mock_mqtt.publish.call_args_list]
     assert any("cpu_temp" in t for t in topics)
     assert any("storage_pct" in t for t in topics)
@@ -74,6 +74,7 @@ def test_discovery_publishes_all_entities(publisher, mock_mqtt):
     assert any("solar_net_avg_ma" in t for t in topics)
     assert any("solar_projected_eod_soc" in t for t in topics)
     assert any("solar_deficit_pct" in t for t in topics)
+    assert any("detection_log" in t for t in topics)
 
 
 def test_publish_snapshot(publisher, mock_mqtt):
@@ -96,3 +97,44 @@ def test_on_command_capture_calls_handler(mock_mqtt):
     pub._on_message(mock_mqtt, None, msg)
 
     handler.assert_called_once_with({"cmd": "capture"})
+
+
+def test_publish_detection_log_sends_to_correct_topic(publisher, mock_mqtt):
+    events = [
+        {
+            "id": "abc-123",
+            "detectedAt": "2026-06-02T10:00:00+00:00",
+            "summary": "deer (87%)",
+            "objects": [{"label": "deer", "confidence": 0.87}],
+            "imageFilename": "abc-123.jpg",
+        }
+    ]
+    publisher.publish_detection_log(events)
+
+    mock_mqtt.publish.assert_called_once()
+    topic, payload_str, *_ = mock_mqtt.publish.call_args[0]
+    payload = json.loads(payload_str)
+
+    assert "/detection_log" in topic
+    assert payload["state"] == "1 detection"
+    assert payload["detections"] == events
+
+
+def test_publish_detection_log_pluralises_state(publisher, mock_mqtt):
+    events = [{"id": str(i)} for i in range(3)]
+    publisher.publish_detection_log(events)
+    payload = json.loads(mock_mqtt.publish.call_args[0][1])
+    assert payload["state"] == "3 detections"
+
+
+def test_publish_detection_log_retained(publisher, mock_mqtt):
+    publisher.publish_detection_log([])
+    kwargs = mock_mqtt.publish.call_args[1]
+    assert kwargs.get("retain") is True
+
+
+def test_publish_detection_log_skipped_when_not_connected(mock_mqtt):
+    pub = TelemetryPublisher()
+    pub._connected = False
+    pub.publish_detection_log([{"id": "x"}])
+    mock_mqtt.publish.assert_not_called()

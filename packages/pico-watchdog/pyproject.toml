@@ -1,0 +1,22 @@
+# This is firmware (MicroPython), not a pip-installable package — there is no
+# [project]/[build-system] table. This file only configures the dev tooling that
+# checks the *pure* modules (gate_logic, soc) under CPython. The hardware glue
+# (main/modbus_rtu/mqtt_link/ota) imports MicroPython builtins and is validated
+# on-device, not in CI.
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["firmware"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+ignore_missing_imports = true

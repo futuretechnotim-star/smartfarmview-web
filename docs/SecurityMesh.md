@@ -185,6 +185,15 @@ Recommended hardware:
 - Optional LoRa radio
     
 
+> **Concrete design:** see [`gateway-node.md`](gateway-node.md) for the
+> implemented gateway — Raspberry Pi 5, EcoWorthy 100W/PWM/20Ah LiFePO4 baseline,
+> a **Raspberry Pi Pico 2 W power controller** for graceful shutdown +
+> wake-on-recharge + hardware watchdog ([`pico-watchdog.md`](pico-watchdog.md)),
+> and a **Waveshare SIM7600G-H DTU** providing the cellular uplink *and* the GNSS
+> timing source below. Power management is two-tier: a software brain
+> (`packages/gateway-node`, sharing `packages/power-policy` with field nodes)
+> degrades gracefully; the Pico is the autonomous hardware backstop.
+
 ---
 
 # GPS / RTK Integration

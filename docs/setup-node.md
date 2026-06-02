@@ -9,7 +9,7 @@ Step-by-step record of how the first prototype field node was assembled and conf
 | Component | Details |
 |---|---|
 | Compute | Raspberry Pi Zero 2 W (header pins soldered) |
-| Camera | Raspberry Pi Camera Module Rev 1.3 (OV5647, 5MP) |
+| Camera | Arducam 16MP IMX519, 120° (D) M12 wide-angle lens (CSI) — needs `dtoverlay=imx519` |
 | Power / UPS | WatangTech Pi Zero UPS HAT (B) — 5V–24V Solar MPPT charging, battery level indicator, UPS |
 | Storage | 32 GB microSD (industrial-grade recommended for future nodes) |
 
@@ -63,23 +63,36 @@ Raspberry Pi OS Lite does not include the camera utilities. Install `rpicam-apps
 sudo apt install -y rpicam-apps
 ```
 
-Verify the camera is detected:
+> **Important — the Arducam IMX519 is not auto-detected.** Unlike the old OV5647,
+> the IMX519 needs an explicit device-tree overlay. `pi-setup.sh` (Phase 8) sets
+> this idempotently — it adds to `/boot/firmware/config.txt`:
+> ```ini
+> camera_auto_detect=0
+> dtoverlay=imx519
+> ```
+> and reboots once when the overlay is first added. If the overlay is missing
+> from the OS image, install Arducam's kernel driver:
+> <https://github.com/ArduCAM/Arducam-Pivariety-V4L2-Driver> (`-p imx519_kernel_driver`).
+> Without the overlay, `rpicam-hello` reports **"No cameras available!"** and the
+> field-node service logs `camera_unavailable` (it stays up and keeps publishing
+> telemetry — a camera fault no longer takes the node dark).
+
+After the overlay is active (post-reboot), verify the camera is detected:
 
 ```bash
 rpicam-hello --list-cameras
 ```
 
-> **Note:** The Camera Module v1.3 uses the OV5647 sensor. It is supported by `libcamera` on 64-bit Pi OS without legacy camera mode.
-
-Expected output:
+Expected output (IMX519, 16MP):
 ```
 Available cameras
 -----------------
-0 : ov5647 [2592x1944 10-bit GBRG] (/base/soc/i2c0mux/i2c@1/ov5647@36)
-    Modes: 'SGBRG10_CSI2P' : 640x480 [58.92 fps - (16, 0)/2560x1920 crop]
-                             1296x972 [46.34 fps - (0, 0)/2592x1944 crop]
-                             1920x1080 [32.81 fps - (348, 434)/1928x1080 crop]
-                             2592x1944 [15.63 fps - (0, 0)/2592x1944 crop]
+0 : imx519 [4656x3496 10-bit RGGB] (/base/soc/i2c0mux/i2c@1/imx519@1a)
+    Modes: 'SRGGB10_CSI2P' : 1280x720  [...]
+                             1920x1080 [...]
+                             2328x1748 [...]
+                             3840x2160 [...]
+                             4656x3496 [...]
 ```
 
 ---

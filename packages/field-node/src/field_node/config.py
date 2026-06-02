@@ -16,14 +16,18 @@ class Settings(BaseSettings):
     mqtt_password: str = ""
     mqtt_discovery_prefix: str = "homeassistant"
 
-    # Camera — DORHEA B0036 160° FOV 5MP fisheye (CSI, OV5647)
-    # Native sensor resolution is 2592x1944 (4:3); fisheye fills the full frame at this ratio
-    capture_width: int = 2592
-    capture_height: int = 1944
+    # Camera — Arducam 16MP IMX519, 120° (D) M12 wide-angle lens (CSI)
+    # IMX519 native modes (4:3): 1280x720, 1920x1080, 2328x1748, 3840x2160, 4656x3496.
+    # 2328x1748 (2x2 binned) balances detail, low-light, and file/encode size for
+    # solar-budgeted snapshot capture; raise to 4656x3496 for full 16MP stills.
+    # Requires dtoverlay=imx519 in config.txt (handled by pi-setup.sh) — the IMX519
+    # is not auto-detected by libcamera.
+    capture_width: int = 2328
+    capture_height: int = 1748
     capture_dir: str = "/opt/field-node/captures"
-    # 15fps keeps the OV5647 exposure window long enough for correct colour balance;
-    # higher framerates (≥30fps) force short exposures that cause a pink colour cast
-    camera_framerate: int = 15
+    # IMX519 has no OV5647 short-exposure colour-cast issue, so framerate is not
+    # constrained for colour balance; 30fps is a sane default for AE settling.
+    camera_framerate: int = 30
 
     # Telemetry
     telemetry_interval_seconds: int = 60
@@ -48,6 +52,15 @@ class Settings(BaseSettings):
     detector_model_path: str = "/opt/field-node/models/detect.tflite"
     detector_labels_path: str = "/opt/field-node/models/labelmap.txt"
     detector_min_confidence: float = 0.5  # 0.0–1.0; raise to reduce false positives
+
+    # Detection history — hi-res image store
+    # detection_store_dir: directory where detection JPEGs are written so HA can serve them
+    # via {haBaseUrl}/local/... (maps to HA config/www/).  Empty = disabled.
+    # Example: "/config/www/landplan/landplanmesh1"
+    detection_store_dir: str = ""
+    # Number of detection events (and corresponding images) to keep.
+    # Oldest files are deleted when the limit is reached.
+    detection_store_count: int = 10
 
     # Solar-aware power management
     solar_day_start_hour: int = 7  # local 24h hour when solar generation begins

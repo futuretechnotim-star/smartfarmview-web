@@ -3,13 +3,12 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "smartfarmview-field-node"
+name = "smartfarmview-gateway-node"
 version = "0.1.0"
-description = "SecurityMesh Field Node — camera capture, motion detection, and MQTT telemetry"
+description = "SecurityMesh Gateway Node — power-budget brain, MQTT broker host, mesh + uplink coordination"
 requires-python = ">=3.12"
 dependencies = [
     "paho-mqtt>=2.0",
-    "smbus2>=0.4",
     "pydantic>=2.0",
     "pydantic-settings>=2.0",
     "structlog>=23.0",
@@ -21,38 +20,22 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-hardware = [
-    "picamera2>=0.3",
-    "gpiozero>=2.0",
-    # TFLite inference — ai-edge-litert is the current package name (replaces tflite-runtime)
-    "ai-edge-litert>=1.0",
-    "pillow>=10.0",
-    "numpy>=1.24",
-]
 dev = [
     "pytest>=7.4",
-    "pytest-asyncio>=0.23",
     "pytest-mock>=3.12",
     "pytest-cov>=4.1",
     "ruff>=0.3",
     "mypy>=1.8",
-    "gpiozero>=2.0",
-    "numpy>=1.24",
-    "pillow>=10.0",
 ]
 
 [project.scripts]
-field-node = "field_node.main:main"
+gateway-power = "gateway_node.main:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.pytest.ini_options]
-asyncio_mode = "auto"
 testpaths = ["tests"]
-markers = [
-    "hardware: requires physical hardware (Pi + camera), only run on self-hosted runner",
-]
 
 [tool.ruff]
 line-length = 100
@@ -68,5 +51,5 @@ strict = true
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["picamera2.*", "paho.*", "gpiozero.*"]
+module = ["paho.*"]
 ignore_missing_imports = true
