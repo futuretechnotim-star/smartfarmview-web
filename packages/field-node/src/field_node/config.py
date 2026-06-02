@@ -53,14 +53,21 @@ class Settings(BaseSettings):
     detector_labels_path: str = "/opt/field-node/models/labelmap.txt"
     detector_min_confidence: float = 0.5  # 0.0–1.0; raise to reduce false positives
 
-    # Detection history — hi-res image store
-    # detection_store_dir: directory where detection JPEGs are written so HA can serve them
-    # via {haBaseUrl}/local/... (maps to HA config/www/).  Empty = disabled.
-    # Example: "/config/www/landplan/landplanmesh1"
+    # Detection history — hi-res image store.
+    # detection_store_dir: where detection JPEGs are written. pi-setup.sh sets this
+    # automatically (in /opt/field-node/.env) to the mounted HA media share at
+    # /mnt/ha-media/<host>/landplan/<host> when ha_smb_host is configured; HA then
+    # serves them at {haBaseUrl}/media/local/landplan/<host>/{id}.jpg (Bearer auth).
+    # Empty = disabled.
     detection_store_dir: str = ""
     # Number of detection events (and corresponding images) to keep.
     # Oldest files are deleted when the limit is reached.
     detection_store_count: int = 10
+
+    # Tailscale hostname/IP of the HA server exposing the `media` Samba share,
+    # e.g. "gateway1.tailnet-xxxx.ts.net". Consumed by pi-setup.sh (not the Python
+    # runtime) to mount the share. Empty → detection image storage stays disabled.
+    ha_smb_host: str = ""
 
     # Solar-aware power management
     solar_day_start_hour: int = 7  # local 24h hour when solar generation begins

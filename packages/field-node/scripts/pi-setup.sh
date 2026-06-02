@@ -165,7 +165,20 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-echo "==> Phase 9: Object detection model (COCO SSD MobileNet V1 INT8)"
+echo "==> Phase 9: HA media Samba mount (detection image store)"
+# ---------------------------------------------------------------------------
+# Mounts HA's `media` share and sets FIELD_NODE_DETECTION_STORE_DIR. Idempotent
+# and graceful: if FIELD_NODE_HA_SMB_HOST is unset in .env, it skips silently and
+# image storage stays disabled. Logic lives in setup-ha-mount.sh (unit-tested).
+HA_MOUNT_SCRIPT="$DEPLOY_PATH/scripts/setup-ha-mount.sh"
+if [ -f "$HA_MOUNT_SCRIPT" ]; then
+    bash "$HA_MOUNT_SCRIPT" || echo "  WARNING: HA mount setup returned non-zero (continuing)"
+else
+    echo "  setup-ha-mount.sh not deployed yet (first-time stdin run) — runs on next deploy"
+fi
+
+# ---------------------------------------------------------------------------
+echo "==> Phase 10: Object detection model (COCO SSD MobileNet V1 INT8)"
 # ---------------------------------------------------------------------------
 MODEL_DIR="$DEPLOY_PATH/models"
 MODEL_FILE="$MODEL_DIR/detect.tflite"
