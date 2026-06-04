@@ -33,8 +33,8 @@ HA always gets first chance to act gracefully. See
 100W panel ─► PWM controller ─► 12.8V 20Ah LiFePO4
                   │  (RS485)          │
                   │                   ├──► 12V→5V buck (5A+), ENABLE gated by Pico ──► Pi 5 (8GB)
-                  │                   ├──► Pico 2 W (own regulator, always-on, ~0.1–0.3W)
-                  │                   └──► SIM7600G-H DTU (7–36V direct, ~1–2W) ──USB──► Pi 5
+                  │                   │                                                     │
+                  │                   ├──► Pico 2 W (own regulator, always-on, ~0.1–0.3W)  └──USB──► SIM7600G-H Dongle (~1–2W)
                   └── RS485 (Modbus RTU) ──► MAX485 ──► Pico UART
 ```
 
@@ -45,19 +45,60 @@ HA always gets first chance to act gracefully. See
 | Controller | EcoWorthy ECO-CON-PWM20A2.1 (PWM) | RS485 Modbus + BW0F BT/WiFi dongle |
 | Battery | EcoWorthy 12.8V 20Ah LiFePO4 | 256 Wh nominal, ~205 Wh usable |
 | Power controller | Raspberry Pi Pico 2 W | gates Pi 5V, watchdog, wake-on-recharge |
-| Uplink + GNSS | Waveshare SIM7600G-H 4G DTU | 4G/3G/2G + GPS/Beidou/Glonass/GALILEO/QZSS; 7–36V; industrial |
+| Uplink + GNSS | Waveshare SIM7600G-H **4G Dongle** | USB plug-in; 4G/3G/2G global bands; GPS/BeiDou/Glonass/LBS; AT&T compatible |
+| RTK base station | SparkFun ZED-F9P (roadmap) | see [RTK section](#rtk-base-station--roadmap) |
 
-### Uplink + GNSS (SIM7600G-H DTU)
-Always-on cellular uplink over USB; **7–36V input runs it straight off the
-battery** (no buck). Its GNSS fulfils the SecurityMesh GPS/RTK/NTP timing role:
-feed NMEA → `gpsd` + `chrony` on the Pi for stratum-1 time and a geographic
-reference, and use it to discipline the Pico's clock.
+### Uplink + GNSS (SIM7600G-H 4G Dongle)
 
-It **complements, not replaces, the Pico.** The DTU's onboard STM8 watchdog
-reboots the *modem* on cellular fault only; its RS485 is a transparent
-serial-over-cellular bridge, **not** a local Modbus master — so the
-battery-safety RS485 read of the charge controller stays on the Pico (keeping
-that loop autonomous).
+The dongle plugs into the Pi's USB port and is powered from it — so the modem
+is off when the Pi is off. This is intentional: the Pico's safety loop is fully
+autonomous and never needs the internet; the cellular uplink is only needed when
+the Pi is running (remote access, OTA, HA relay, telemetry sync).
+
+On Pi OS the dongle enumerates as a USB CDC-ECM/RNDIS network adapter +
+several serial ports. The standard integration stack:
+
+```
+ModemManager   → manages modem state, SIM, bearer (AT&T LTE)
+NetworkManager → manages wwan0, sets default route
+gpsd           → reads NMEA from /dev/ttyUSB_gnss (stable udev name)
+chrony         → uses gpsd as stratum-1 NTP source for the mesh
+```
+
+Typical port assignments (set stable udev names in `pi-setup.sh` to avoid
+index shifts on reboot):
+
+| Port | Function |
+|---|---|
+| `ttyUSB0` | AT commands (ModemManager) |
+| `ttyUSB1` | NMEA / GNSS stream (`gpsd`) |
+| `ttyUSB2` | Diagnostic |
+
+The dongle's GNSS provides **coarse position + time** (GPS/BeiDou/Glonass).
+This is sufficient for `gpsd`/`chrony` (stratum-1 NTP for the mesh) and a
+geographic reference. It **cannot** act as an RTK base station — that requires
+a precision receiver outputting raw RTCM3 observations (see roadmap below).
+
+### RTK base station — roadmap
+
+The gateway is the natural host for an RTK base station once RTK rover
+capability is added to the platform. Hardware already validated in the LandPlan
+survey stick: **SparkFun ZED-F9P** (or equivalent F9P breakout).
+
+When implemented:
+- ZED-F9P connects to the Pi over USB (or UART)
+- `str2str` (RTKLIB) reads RTCM3 observations from the F9P
+- Options for correction broadcast:
+  - **NTRIP caster** — corrections pulled by rovers over cellular/mesh
+  - **Mesh multicast** — RTCM3 broadcast over BATMAN-adv for on-property rovers
+  - **LoRa fallback** — long-range broadcast for areas outside WiFi mesh range
+- The SIM7600G-H dongle remains the internet uplink; the F9P is an additional
+  USB device alongside it
+
+The SIM7600G-H GNSS is **not** used for RTK base positioning — the F9P has its
+own high-precision GNSS front-end and antenna.
+
+> **Not in scope for v1.** Mark as a roadmap item; no code changes needed now.
 
 ### Starlink — OFF the solar budget
 Starlink Mini draws ~15W idle / 17–40W active / 60W boot (360–960 Wh/day). It is
@@ -73,7 +114,8 @@ general-purpose OS, and this keeps tooling consistent with the field node
 (systemd, Tailscale, the rsync-deploy pattern in [`setup-node.md`](setup-node.md)).
 
 Services: Home Assistant · Mosquitto · BATMAN-adv + hostapd/dnsmasq · Tailscale ·
-ModemManager/`gpsd`/`chrony` (SIM7600G-H) · gateway camera · gateway power brain.
+ModemManager + NetworkManager + `gpsd` + `chrony` (SIM7600G-H dongle) · gateway
+camera · gateway power brain.
 
 ## Software power brain (`packages/gateway-node`)
 
@@ -97,8 +139,8 @@ Gateway → MQTT: `securitymesh/<node>/power` (mode + projection, retained) and
 
 ## Power budget — predictions to validate
 
-Estimated continuous load (Pi 5 + NVMe + DTU + mesh + camera + Pico + buck
-losses): **~7–9W avg**, peaks 12–15W → **~170–220 Wh/day**.
+Estimated continuous load (Pi 5 + NVMe + SIM7600G-H dongle ~1–2W + mesh + camera
++ Pico + buck losses): **~7–9W avg**, peaks 12–15W → **~170–220 Wh/day**.
 
 PWM harvest from the 100W panel (effective peak ≈ Imp×Vbatt ≈ ~73W):
 
@@ -135,3 +177,7 @@ battery and MPPT, TBC by data).
 - Pick the 12V→5V buck (5A+, switchable EN) for Pi 5 peaks.
 - Tailscale-on-Pico is not native — remote access is Pi-proxied (see
   [`pico-watchdog.md`](pico-watchdog.md)).
+- Add `pi-setup.sh` phase for ModemManager, NetworkManager, `gpsd`, `chrony`,
+  and udev stable names for the SIM7600G-H USB ports.
+- **Roadmap:** SparkFun ZED-F9P RTK base station + `str2str` NTRIP/mesh broadcast
+  (same receiver as the LandPlan survey stick; see RTK section above).
