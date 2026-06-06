@@ -10,6 +10,7 @@ import pytest
 from power_policy import (
     PowerMode,
     combine_modes,
+    compute_dawn_recovery_mode,
     compute_solar_mode,
     evaluate_soc_mode,
     severity_index,
@@ -36,12 +37,12 @@ class TestEvaluateSocMode:
         ("soc", "expected"),
         [
             (100, PowerMode.NORMAL),
-            (60, PowerMode.NORMAL),  # boundary: enter ECO is < 60
-            (59, PowerMode.ECO),
-            (40, PowerMode.ECO),  # boundary: enter LOW is < 40
-            (39, PowerMode.LOW),
-            (20, PowerMode.LOW),  # boundary: enter CRITICAL is < 20
-            (19, PowerMode.CRITICAL),
+            (70, PowerMode.NORMAL),  # boundary: enter ECO is < 70
+            (69, PowerMode.ECO),
+            (50, PowerMode.ECO),  # boundary: enter LOW is < 50
+            (49, PowerMode.LOW),
+            (25, PowerMode.LOW),  # boundary: enter CRITICAL is < 25
+            (24, PowerMode.CRITICAL),
             (10, PowerMode.CRITICAL),
         ],
     )
@@ -49,17 +50,19 @@ class TestEvaluateSocMode:
         assert evaluate_soc_mode(PowerMode.NORMAL, soc) == expected
 
     def test_hysteresis_stays_in_eco(self) -> None:
-        # In ECO, 63 is above enter (60) but below exit (65) → stays ECO.
-        assert evaluate_soc_mode(PowerMode.ECO, 63) == PowerMode.ECO
+        # In ECO, 72 is above enter (70) but below exit (75) → stays ECO.
+        assert evaluate_soc_mode(PowerMode.ECO, 72) == PowerMode.ECO
 
     def test_hysteresis_leaves_eco_at_exit(self) -> None:
-        assert evaluate_soc_mode(PowerMode.ECO, 65) == PowerMode.NORMAL
+        assert evaluate_soc_mode(PowerMode.ECO, 75) == PowerMode.NORMAL
 
     def test_hysteresis_stays_in_low(self) -> None:
-        assert evaluate_soc_mode(PowerMode.LOW, 43) == PowerMode.LOW
+        # In LOW, 52 is above enter (50) but below exit (55) → stays LOW.
+        assert evaluate_soc_mode(PowerMode.LOW, 52) == PowerMode.LOW
 
     def test_hysteresis_stays_in_critical(self) -> None:
-        assert evaluate_soc_mode(PowerMode.CRITICAL, 23) == PowerMode.CRITICAL
+        # In CRITICAL, 27 is above enter (25) but below exit (30) → stays CRITICAL.
+        assert evaluate_soc_mode(PowerMode.CRITICAL, 27) == PowerMode.CRITICAL
 
     def test_custom_thresholds(self) -> None:
         enter = {PowerMode.CRITICAL: 10, PowerMode.LOW: 30, PowerMode.ECO: 50}
@@ -157,3 +160,33 @@ class TestCombineModes:
         mode, reason = combine_modes(PowerMode.ECO, None, has_solar_data=False)
         assert mode == PowerMode.ECO
         assert reason == "soc"
+
+
+class TestComputeDawnRecoveryMode:
+    def test_no_dawn_soc_recorded_no_constraint(self) -> None:
+        assert compute_dawn_recovery_mode(dawn_soc_pct=None, current_soc_pct=30) is None
+
+    def test_healthy_dawn_soc_no_constraint(self) -> None:
+        # Dawn at 60% ≥ threshold (50) → no recovery constraint
+        assert compute_dawn_recovery_mode(dawn_soc_pct=60, current_soc_pct=40) is None
+
+    def test_depleted_dawn_holds_low_until_recovery(self) -> None:
+        # Dawn at 35% < threshold; current at 55% < recovery (65) → LOW
+        assert compute_dawn_recovery_mode(dawn_soc_pct=35, current_soc_pct=55) == PowerMode.LOW
+
+    def test_depleted_dawn_lifts_once_recovered(self) -> None:
+        # Dawn at 35% < threshold; current at 65% ≥ recovery → no constraint
+        assert compute_dawn_recovery_mode(dawn_soc_pct=35, current_soc_pct=65) is None
+
+    def test_dawn_exactly_at_threshold_no_constraint(self) -> None:
+        # dawn_soc_pct == dawn_low_threshold → "healthy" (not depleted)
+        assert compute_dawn_recovery_mode(dawn_soc_pct=50, current_soc_pct=40) is None
+
+    def test_custom_thresholds(self) -> None:
+        mode = compute_dawn_recovery_mode(
+            dawn_soc_pct=30,
+            current_soc_pct=55,
+            dawn_low_threshold=40,
+            recovery_threshold=70,
+        )
+        assert mode == PowerMode.LOW

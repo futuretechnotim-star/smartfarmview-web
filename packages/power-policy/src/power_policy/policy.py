@@ -25,15 +25,17 @@ class PowerMode(enum.Enum):
 _SEVERITY: list[PowerMode] = [PowerMode.NORMAL, PowerMode.ECO, PowerMode.LOW, PowerMode.CRITICAL]
 
 # SoC % thresholds to enter / leave each mode (5 % hysteresis prevents flapping).
+# Thresholds are conservative: 10,000mAh LiFePO4 at rural deployment drains ~180mAh/h
+# overnight, so the system must not treat 40% as "safe" — it may not see sun next day.
 DEFAULT_ENTER_AT: dict[PowerMode, int] = {
-    PowerMode.CRITICAL: 20,
-    PowerMode.LOW: 40,
-    PowerMode.ECO: 60,
+    PowerMode.CRITICAL: 25,
+    PowerMode.LOW: 50,
+    PowerMode.ECO: 70,
 }
 DEFAULT_EXIT_AT: dict[PowerMode, int] = {
-    PowerMode.CRITICAL: 25,
-    PowerMode.LOW: 45,
-    PowerMode.ECO: 65,
+    PowerMode.CRITICAL: 30,
+    PowerMode.LOW: 55,
+    PowerMode.ECO: 75,
 }
 
 # Projected end-of-day SoC deficit → solar-driven mode escalation
@@ -43,6 +45,12 @@ DEFAULT_DEFICIT_THRESHOLDS: list[tuple[float, PowerMode]] = [
     (10.0, PowerMode.LOW),
     (0.0, PowerMode.ECO),
 ]
+
+# Dawn recovery: if the battery woke below this SoC, hold LOW until it climbs back up.
+# Prevents a depleted node from returning to full operation before it has recharged enough
+# to survive a second bad day.
+DEFAULT_DAWN_LOW_SOC: int = 50
+DEFAULT_DAWN_RECOVERY_SOC: int = 65
 
 
 @dataclass
@@ -136,6 +144,27 @@ def compute_solar_mode(
         projected_eod_soc=round(projected_soc, 1),
         deficit_pct=round(deficit, 1),
     )
+
+
+def compute_dawn_recovery_mode(
+    *,
+    dawn_soc_pct: int | None,
+    current_soc_pct: int,
+    dawn_low_threshold: int = DEFAULT_DAWN_LOW_SOC,
+    recovery_threshold: int = DEFAULT_DAWN_RECOVERY_SOC,
+) -> PowerMode | None:
+    """Return LOW if the battery woke at dawn below the reserve and hasn't recovered.
+
+    ``dawn_soc_pct`` is the SoC recorded at the start of the current solar day
+    (``None`` before the first dawn transition — no constraint applied). While dawn
+    was depleted and the battery hasn't climbed back to ``recovery_threshold``, the
+    node is held at least at LOW to prioritise recharging over normal operation.
+    """
+    if dawn_soc_pct is None or dawn_soc_pct >= dawn_low_threshold:
+        return None
+    if current_soc_pct >= recovery_threshold:
+        return None
+    return PowerMode.LOW
 
 
 def combine_modes(

@@ -36,7 +36,7 @@ class Settings(BaseSettings):
     power_monitor: str = "ina219_hat"
 
     # Battery capacity in mAh — update when swapping batteries
-    battery_capacity_mah: int = 1500
+    battery_capacity_mah: int = 10000
 
     # PIR sensor (HC-SR501) — GPIO pin in BCM numbering, physical pin 37
     pir_gpio_pin: int = 26
@@ -74,8 +74,12 @@ class Settings(BaseSettings):
     # Solar-aware power management
     solar_day_start_hour: int = 7  # local 24h hour when solar generation begins
     solar_day_end_hour: int = 20  # local 24h hour when solar generation ends
-    solar_min_overnight_soc: int = 30  # minimum SoC % needed at day_end to run through the night
-    solar_current_avg_minutes: int = 30  # rolling window for net current average
+    solar_min_overnight_soc: int = 55  # minimum SoC % needed at day_end to run through the night
+    solar_current_avg_minutes: int = 60  # rolling window for net current average
+
+    # Dawn recovery — if dawn SoC is below this, hold LOW until battery recovers
+    dawn_low_soc_threshold: int = 50
+    dawn_recovery_soc: int = 65
 
 
 settings = Settings()

@@ -8,8 +8,10 @@ from power_policy import (
     PowerMode,
     SolarStatus,
     combine_modes,
+    compute_dawn_recovery_mode,
     compute_solar_mode,
     evaluate_soc_mode,
+    severity_index,
 )
 
 from field_node.config import settings
@@ -31,6 +33,7 @@ class PowerManager:
         self._current_history: deque[tuple[float, float]] = deque()  # (monotonic_time, current_ma)
         self._was_daytime = False
         self._solar_status = SolarStatus(is_daytime=False)
+        self._dawn_soc_pct: int | None = None  # SoC recorded at most recent dawn transition
 
     @property
     def mode(self) -> PowerMode:
@@ -59,10 +62,15 @@ class PowerManager:
         window = settings.solar_current_avg_minutes * 60.0
         is_day = self._is_daytime()
 
-        # Clear stale overnight readings on dawn transition so they don't skew daytime average
+        # Dawn transition: snapshot SoC for recovery logic, clear overnight current history
         if is_day and not self._was_daytime:
+            self._dawn_soc_pct = soc_pct
             self._current_history.clear()
-            log.info("solar_tracking_started", day_start=settings.solar_day_start_hour)
+            log.info(
+                "solar_tracking_started",
+                day_start=settings.solar_day_start_hour,
+                dawn_soc_pct=soc_pct,
+            )
         self._was_daytime = is_day
 
         if current_ma is not None and is_day:
@@ -92,6 +100,18 @@ class PowerManager:
         new_mode, reason = combine_modes(
             new_soc_mode, solar_mode, has_solar_data=net_avg is not None
         )
+
+        # Dawn recovery: if the battery woke depleted, hold LOW until recharged
+        dawn_mode = compute_dawn_recovery_mode(
+            dawn_soc_pct=self._dawn_soc_pct,
+            current_soc_pct=soc_pct,
+            dawn_low_threshold=settings.dawn_low_soc_threshold,
+            recovery_threshold=settings.dawn_recovery_soc,
+        )
+        if dawn_mode is not None and severity_index(dawn_mode) > severity_index(new_mode):
+            new_mode = dawn_mode
+            reason = "dawn_recovery"
+
         status.mode_reason = reason
 
         if new_mode != self._mode:
