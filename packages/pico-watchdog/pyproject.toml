@@ -1,8 +1,20 @@
-# This is firmware (MicroPython), not a pip-installable package — there is no
-# [project]/[build-system] table. This file only configures the dev tooling that
-# checks the *pure* modules (gate_logic, soc) under CPython. The hardware glue
-# (main/modbus_rtu/mqtt_link/ota) imports MicroPython builtins and is validated
-# on-device, not in CI.
+# This is firmware (MicroPython), not a pip-installable package.
+# [project] is declared only to support `pip install -e ".[dev]"` for dev tooling.
+# The hardware glue (main/modbus_rtu/mqtt_link/ota) imports MicroPython builtins
+# and is validated on-device, not in CI.
+
+[project]
+name = "smartfarmview-pico-watchdog"
+version = "0.1.0"
+requires-python = ">=3.13"
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+    "mypy",
+    "mpremote",   # Pico 2 W flash/copy/run tool
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

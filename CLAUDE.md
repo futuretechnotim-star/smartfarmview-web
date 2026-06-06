@@ -89,5 +89,134 @@ CI runs all four steps and will reject the push if any fail. Run them locally to
 
 Document env vars here as they are introduced. Example:
 ```
-TAILSCALE_API_KEY=      # TailScale API key for device discovery
+TAILSCALE_API_KEY=           # TailScale API key for device discovery
+GATEWAY_NODE_HA_BASE_URL=    # HA REST base URL (default: http://localhost:8123)
+GATEWAY_NODE_HA_TOKEN=       # HA long-lived access token (gateway node only)
 ```
+
+---
+
+## Claude Code + Codex Partnership
+
+**Claude Code** is the deep implementation partner inside this repo — writing code,
+running tests, editing configs, and committing changes.
+
+**Codex** operates cross-repo: scouting requirements, reviewing diffs, planning
+work across smartfarmview-web / landplan / HACS, and writing handoff briefs. Codex
+maintains a coordination workbench at `/Users/timwebster/Documents/Codex/codex-workbench`.
+
+When handing off to Codex, see **Handoff Format** below.
+
+---
+
+## Truth Sources
+
+Primary documentation lives in `docs/` — treat it as the current source of
+requirements. README files are useful for orientation but may lag active
+development. When `docs/` and a README conflict, `docs/` wins.
+
+Key docs:
+- `docs/gateway-node.md` — power brain architecture, MQTT contract, hardware topology
+- `docs/pico-watchdog.md` — Pico 2 W firmware, watchdog loop, power-cut thresholds
+- `docs/SecurityMesh.md` — mesh overview, node roles, Tailscale ACL design
+- `docs/setup-node.md` — repeatable field/gateway node provisioning procedure
+- `docs/power-hat.md` — power hat hardware spec and wiring reference
+- `docs/sensors.md` — sensor types, telemetry schema, field-node integration
+
+---
+
+## TDD and Test Expectations
+
+Require tests for new behaviour where practical.
+
+- **Write unit tests before implementation** for pure logic, policy engines, data
+  transforms, and protocol encoders — this applies to `power-policy`, `field-node`
+  power/telemetry logic, and `gateway-node` power brain and HA client.
+- **Integration tests** around external seams: MQTT message handling, HA REST
+  calls (use `httpx`'s mock transport), Pico UART protocol.
+- Hardware-dependent code (camera, GPIO, UART) is exempt from unit tests but
+  must have a `--dry-run` / mock path that *is* testable.
+
+Test commands (run from each package directory with venv active):
+```bash
+pytest tests/unit/           # unit tests
+ruff check src/ tests/       # lint
+ruff format src/ tests/      # format
+mypy src/                    # type check
+```
+
+CI runs all four and rejects the push on failure. Run locally first.
+
+---
+
+## Playwright / User Tests
+
+This repo is not primarily a web UI repo — Playwright is not used here directly.
+
+However, `apps/web` (when built) will expose the SmartFarmView dashboard and any
+public-facing field-node status pages. When that work begins:
+- Provide stable REST/WebSocket API contracts and mock data fixtures so Playwright
+  tests in a separate test repo can drive the UI without needing live hardware.
+- Keep API shape changes noted in PRs so cross-repo Playwright suites can be
+  updated in tandem.
+
+---
+
+## GitHub Workflow Practice
+
+- **Create an issue** for each coherent work slice before branching.
+- **Branch per change** — `feat/`, `fix/`, `chore/` prefixes; keep branches short-lived.
+- **Open draft PRs early** so Codex can review before the work is complete.
+- PR descriptions must include:
+  - What changed and why
+  - Test plan (commands run, expected output)
+  - Deployment notes (which nodes need re-deploy, env vars added)
+  - Rollback notes for any destructive or irreversible steps
+- Keep `smartfarmtechno.com/docs` impact in mind — if a change affects the
+  documented setup procedure, update `docs/setup-node.md` in the same PR.
+
+---
+
+## Deployment Monitoring
+
+After deploying to field or gateway nodes, confirm health via:
+
+```bash
+# Field node
+systemctl status field-node --no-pager
+journalctl -u field-node -n 20 --no-pager
+
+# Gateway node
+systemctl status gateway-power --no-pager
+journalctl -u gateway-power -n 20 --no-pager
+```
+
+MQTT heartbeat (gateway publishes every 30 s):
+```
+topic: securitymesh/gateway/pi/heartbeat
+```
+
+Home Assistant discovery: **Settings → Devices & Services → MQTT** — node
+devices should appear automatically on service start.
+
+GitHub Actions deploy status:
+```bash
+gh run list --repo futuretechnotim-star/smartfarmview-web --limit 5
+gh run watch <run-id>
+```
+
+CI rejects on: ruff lint errors, mypy type errors, failing unit tests.
+
+---
+
+## Handoff Format
+
+Before passing work to Codex, write a brief at:
+`/Users/timwebster/Documents/Codex/codex-workbench/handoffs/claude-to-codex.md`
+
+Include:
+- **Branch** and repo
+- **Files changed** (with a one-line summary of each)
+- **Tests run** and their results
+- **Known risks** or fragile assumptions
+- **Open questions** Codex should resolve or flag

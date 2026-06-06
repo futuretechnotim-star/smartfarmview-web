@@ -21,8 +21,10 @@ from typing import Any
 
 import paho.mqtt.client as mqtt
 import structlog
+from power_policy import PowerMode
 
 from gateway_node.config import settings
+from gateway_node.ha_client import request_shutdown
 from gateway_node.power import GatewayPowerManager
 
 log = structlog.get_logger()
@@ -63,12 +65,14 @@ def main() -> None:
     log.info("gateway_power_starting", node_id=settings.node_id)
     manager = GatewayPowerManager()
     client = _build_client()
+    _shutdown_requested = False
 
     def on_connect(c: mqtt.Client, userdata: Any, flags: Any, rc: Any, props: Any = None) -> None:
         log.info("mqtt_connected", host=settings.mqtt_host, port=settings.mqtt_port)
         c.subscribe(settings.pico_telemetry_topic)
 
     def on_message(c: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
+        nonlocal _shutdown_requested
         try:
             data = json.loads(msg.payload.decode())
             soc_pct = int(data["soc_pct"])
@@ -77,8 +81,13 @@ def main() -> None:
         except (ValueError, KeyError, TypeError) as e:
             log.warning("pico_telemetry_parse_error", error=str(e), payload=msg.payload[:200])
             return
-        manager.update(soc_pct, current_ma)
+        new_mode = manager.update(soc_pct, current_ma)
         _publish_state(c, manager)
+        if new_mode == PowerMode.CRITICAL and not _shutdown_requested:
+            _shutdown_requested = True
+            request_shutdown()
+        elif new_mode != PowerMode.CRITICAL:
+            _shutdown_requested = False
 
     client.on_connect = on_connect
     client.on_message = on_message

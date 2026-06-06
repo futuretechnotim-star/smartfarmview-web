@@ -1,0 +1,19 @@
+[Unit]
+Description=SmartFarmView Gateway Power Brain
+After=network.target mosquitto.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=techno
+WorkingDirectory=/opt/gateway-node
+EnvironmentFile=/opt/gateway-node/.env
+ExecStart=/opt/gateway-node/.venv/bin/gateway-power
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=gateway-power
+
+[Install]
+WantedBy=multi-user.target

@@ -228,4 +228,244 @@ No manual HA configuration required — entities are registered via MQTT discove
 
 ---
 
-<!-- Steps below are pending confirmation and will be added as setup progresses -->
+---
+
+## Gateway Node Setup (Pi 5 — sfv-gateway)
+
+Hardware: Raspberry Pi 5 (8GB), microSD, SIM7600G-H dongle (USB).
+OS: Raspberry Pi OS Lite 64-bit + Home Assistant Supervised.
+Tailscale IP: `100.127.225.15`  SSH key: `~/.ssh/gateway_deploy`
+
+### Step 1 — Flash the OS
+
+1. Open **Raspberry Pi Imager** → Device: Pi 5, OS: Raspberry Pi OS Lite (64-bit).
+2. **Edit Settings:**
+
+   | Setting | Value |
+   |---|---|
+   | Hostname | `sfv-gateway` |
+   | Username | `techno` |
+   | SSH | Enable — password auth |
+   | WiFi | lab/home network (initial setup only) |
+
+3. Flash to microSD, boot the Pi.
+
+### Step 2 — SSH in and bootstrap
+
+From the dev Mac (once the Pi is on the network):
+
+```bash
+ssh techno@sfv-gateway.local
+```
+
+Authorize the Claude Code deploy key and enable passwordless sudo (one-time, password required):
+
+```bash
+# Paste the gateway_deploy public key
+echo "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKrxIT12QXbuZ3izLWPH3SgQBQyXv794T6TYQbLVKD1I claude-code-gateway" >> ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+echo "techno ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/techno-nopasswd
+sudo chmod 440 /etc/sudoers.d/techno-nopasswd
+```
+
+### Step 3 — OS update
+
+```bash
+sudo apt update && sudo apt full-upgrade -y
+```
+
+### Step 4 — Install HA Supervised dependencies
+
+```bash
+sudo apt install -y apparmor cifs-utils curl dbus jq libglib2.0-bin lsb-release \
+  network-manager nfs-common systemd-journal-remote udisks2 wget systemd-resolved
+sudo systemctl enable --now systemd-resolved
+```
+
+### Step 5 — Install Docker
+
+```bash
+curl -fsSL https://get.docker.com | sudo sh
+sudo usermod -aG docker techno
+```
+
+### Step 6 — Install HA OS Agent
+
+```bash
+OS_AGENT_VERSION=$(curl -fsSL https://api.github.com/repos/home-assistant/os-agent/releases/latest | jq -r '.tag_name' | tr -d 'v')
+curl -fsSL -o /tmp/os-agent.deb "https://github.com/home-assistant/os-agent/releases/latest/download/os-agent_${OS_AGENT_VERSION}_linux_aarch64.deb"
+sudo dpkg -i /tmp/os-agent.deb
+```
+
+### Step 7 — Install HA Supervised
+
+Pre-seed the machine type (required — non-interactive install fails without this):
+
+```bash
+curl -fsSL -o /tmp/homeassistant-supervised.deb \
+  https://github.com/home-assistant/supervised-installer/releases/latest/download/homeassistant-supervised.deb
+sudo dpkg -i /tmp/homeassistant-supervised.deb || true
+echo 'homeassistant-supervised ha/machine-type select raspberrypi5-64' | sudo debconf-set-selections
+sudo systemctl restart systemd-resolved
+sudo DEBIAN_FRONTEND=noninteractive dpkg --configure homeassistant-supervised
+```
+
+> **Note:** The installer fails if DNS is broken. `systemd-resolved` must be running
+> before `dpkg --configure` is called. If `version.home-assistant.io` doesn't resolve,
+> restart `systemd-resolved` and retry.
+
+HA pulls its containers in the background. Reachable at `http://<ip>:8123` within ~5 min.
+
+### Step 8 — Install Tailscale (system service)
+
+```bash
+curl -fsSL https://tailscale.com/install.sh | sudo sh
+sudo tailscale up   # opens auth URL — approve in browser
+tailscale ip -4     # confirm 100.x.x.x address
+```
+
+> Run Tailscale as a **system service** (not the HA add-on) so SSH, the deploy
+> pipeline, and the power brain are all on the tailnet — not just HA traffic.
+
+### Step 9 — HA onboarding + Mosquitto
+
+1. Open `http://sfv-gateway.local:8123` and complete onboarding.
+2. **Settings → Add-ons → Add-on Store → Mosquitto broker** — Install, enable
+   Start on boot + Watchdog.
+3. In Mosquitto **Configuration** tab, add logins:
+   ```yaml
+   - username: gateway-node
+     password: "your-password"
+   - username: pico-watchdog
+     password: "your-password"
+   ```
+4. Start the add-on.
+
+### Step 10 — Deploy gateway-node power brain
+
+From the dev Mac:
+
+```bash
+cd smartfarmview-web
+
+# Create opt directories (root-owned, pre-create as techno)
+ssh -i ~/.ssh/gateway_deploy techno@sfv-gateway.local \
+  "sudo install -d -o techno -g techno /opt/gateway-node /opt/power-policy"
+
+# Sync packages
+rsync -a -e "ssh -i ~/.ssh/gateway_deploy" packages/gateway-node/ techno@sfv-gateway.local:/opt/gateway-node/
+rsync -a -e "ssh -i ~/.ssh/gateway_deploy" packages/power-policy/  techno@sfv-gateway.local:/opt/power-policy/
+
+# Provision (installs venv, deps, systemd service)
+ssh -i ~/.ssh/gateway_deploy techno@sfv-gateway.local "sudo bash /opt/gateway-node/scripts/pi-setup.sh"
+```
+
+Create `/opt/gateway-node/.env` on the Pi:
+
+```bash
+cat > /opt/gateway-node/.env << 'EOF'
+GATEWAY_NODE_MQTT_USERNAME=gateway-node
+GATEWAY_NODE_MQTT_PASSWORD=<mosquitto-password>
+GATEWAY_NODE_HA_BASE_URL=http://localhost:8123
+GATEWAY_NODE_HA_TOKEN=<ha-long-lived-token>
+GATEWAY_NODE_SERVICE_CONTROL=dry-run
+EOF
+sudo systemctl start gateway-power
+```
+
+Generate the HA token at **Profile → Long-Lived Access Tokens**. Keep it secret.
+
+### Step 11 — Verify
+
+```bash
+sudo systemctl status gateway-power --no-pager
+journalctl -u gateway-power -n 20 --no-pager
+```
+
+Expected:
+```
+gateway_power_starting   node_id=sfv-gateway
+mqtt_connected           host=127.0.0.1 port=1883
+```
+
+MQTT heartbeat (published every 30 s once Pico is wired):
+```
+topic: securitymesh/gateway/pi/heartbeat
+```
+
+---
+
+## Gateway Node — Tailscale Funnel for Home Assistant
+
+Funnel exposes the HA frontend at a stable public HTTPS URL
+(`https://homeassistant.tail7b513f.ts.net`) without requiring callers to be on
+the tailnet. Required for multi-user LandPlan field-node access.
+
+### Prerequisites — Tailscale admin console
+
+In the [Tailscale admin DNS settings](https://login.tailscale.com/admin/dns):
+
+- **MagicDNS** — must be enabled
+- **HTTPS Certificates** — must be enabled (separate toggle; this is the step
+  most likely to be missing — the add-on logs `FATAL: Tailscale's HTTPS support
+  is disabled` if it is off)
+
+In **Access Controls**, the tailnet ACL must grant the `funnel` node attribute:
+
+```json
+"nodeAttrs": [
+  {
+    "target": ["autogroup:member"],
+    "attr":   ["funnel"]
+  }
+]
+```
+
+### Step 1 — Trust the reverse proxy in HA
+
+The Tailscale add-on acts as a reverse proxy to HA on port 8123. Without this,
+HA rejects the proxied connections and the add-on logs
+`FATAL: Unable to connect to Home Assistant as reverse proxy` in a tight loop.
+
+Using the **File Editor add-on** (Settings → Add-ons → Add-on Store → File
+Editor), open `/config/configuration.yaml` and add:
+
+```yaml
+http:
+  use_x_forwarded_for: true
+  trusted_proxies:
+    - 127.0.0.1
+    - ::1
+```
+
+Validate: **Developer Tools → YAML → Check Configuration**, then restart HA
+core.
+
+### Step 2 — Configure the Tailscale add-on
+
+In **Settings → Add-ons → Tailscale → Configuration tab**, ensure the following
+keys are present (merge with existing config, do not replace it):
+
+```yaml
+share_homeassistant: funnel
+share_on_port: "443"
+```
+
+Save, then restart the add-on from the **Info** tab.
+
+### Verify
+
+The add-on log should be clean (no FATAL lines). Funnel will appear in the
+Tailscale admin **Machines** view under the `homeassistant` node.
+
+Test from any machine (on or off the tailnet):
+
+```bash
+curl -H "Authorization: Bearer <long-lived-token>" \
+     https://homeassistant.tail7b513f.ts.net/api/
+```
+
+Expected: `{"message":"API running."}`
+
+The long-lived token is generated in HA under **Profile → Long-Lived Access
+Tokens**. Treat it as a secret — do not paste it into logs or shared terminals.

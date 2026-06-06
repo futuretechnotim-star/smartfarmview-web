@@ -1,0 +1,17 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ssh -i ~/.ssh/gateway_deploy *)",
+      "Bash(scp -i ~/.ssh/gateway_deploy *)",
+      "Bash(rsync -* -e * techno@sfv-gateway*)",
+      "Bash(mpremote connect list)",
+      "Bash(mpremote fs cp *)",
+      "Bash(mpremote fs ls)",
+      "Bash(mpremote fs ls *)",
+      "Bash(mpremote mip install *)",
+      "Bash(mpremote reset)",
+      "Bash(mpremote run *)",
+      "Bash(mpremote exec *)"
+    ]
+  }
+}

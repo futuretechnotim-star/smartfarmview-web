@@ -586,6 +586,114 @@ Recommended additions:
 
 ---
 
+# v2 — Resilient Broker Failover
+
+## Problem
+
+The MQTT broker runs on the gateway Pi. When the gateway Pi is powered down
+(low-battery cutoff), the broker disappears and field nodes lose their publish
+channel. The gateway's `hostapd` AP also goes with it, taking the local WiFi
+network down entirely.
+
+## Design Principle
+
+All field nodes are **identical in hardware and software** — any node is capable
+of becoming the broker. The system elects the most capable node dynamically,
+using the Pico watchdog as the trusted authority on gateway power state.
+
+## Architecture
+
+```
+Normal operation:
+  Gateway Pi  →  Mosquitto (primary broker)  →  all nodes publish here
+  Pico        →  publishes gateway power telemetry to gateway broker
+
+Grace period (Pico asserts SHUTDOWN_REQ, Pi still up):
+  Pico        →  publishes securitymesh/gateway/status = SHUTTING_DOWN
+  All nodes   →  each publishes current SoC to securitymesh/<node-id>/power
+  Gateway Pi  →  identifies highest-SoC field node, publishes
+                 securitymesh/broker/elected = <node-id>:<ip>
+  Elected node → starts Mosquitto, announces securitymesh/broker/active = <ip>
+  All nodes   →  reconfigure MQTT client to elected broker
+  Pico        →  reconfigures MQTT client to elected broker
+  Grace expires → Pi cuts power
+
+Gateway off (field-node broker active):
+  Pico        →  publishes power telemetry to elected broker
+  Field nodes →  publish events to elected broker; HA automations offline
+  Elected node → buffers HA-bound events for sync on recovery
+
+Recovery (Pico re-powers gateway Pi):
+  Pico        →  publishes securitymesh/gateway/status = ONLINE to elected broker
+  Gateway Pi  →  Mosquitto starts, publishes securitymesh/broker/primary = online
+  All nodes   →  switch MQTT client back to gateway broker
+  Elected node → publishes buffered events, stops Mosquitto
+```
+
+## Network Layer Dependency
+
+The gateway Pi also hosts the `hostapd` mesh AP. When it goes down, WiFi
+connectivity between nodes requires **BATMAN-adv** running on every node's
+wireless interface in ad-hoc mode. Without BATMAN-adv, field nodes lose all
+network access when the gateway AP disappears and the failover cannot proceed.
+
+BATMAN-adv is therefore a hard prerequisite for v2 failover. See
+[Mesh Networking](#mesh-networking).
+
+## Node Requirements (all field nodes)
+
+Every field node must have identical capabilities to be election-eligible:
+
+| Capability | How |
+|---|---|
+| BATMAN-adv mesh participant | `pi-setup.sh` configures `bat0` on `wlan0` |
+| Mosquitto installed (stopped by default) | `apt install mosquitto`, service disabled |
+| Power telemetry published | SoC on `securitymesh/<node-id>/power` |
+| Broker election subscriber | field-node service handles `securitymesh/broker/elected` |
+| Dynamic MQTT client reconfiguration | field-node service reconnects on broker change |
+| Local event queue | events buffered to disk when broker is transitioning |
+
+## Pico Watchdog Role
+
+The Pico is the **sole trusted source of gateway power state**. It:
+
+1. Publishes `securitymesh/gateway/status = SHUTTING_DOWN` during the grace
+   period (Pi still up, broker still reachable).
+2. Publishes `securitymesh/gateway/status = ONLINE` after re-powering the Pi
+   (connecting to whichever broker is currently active — gateway or field node).
+
+The Pico does **not** participate in broker election or run a broker itself.
+Its safety loop (voltage monitoring, gate control) remains fully autonomous and
+network-independent throughout.
+
+## Gateway PIR Extension (v2)
+
+The Pico watchdog will gain a PIR sensor (spare GPIO) to detect motion near the
+gateway enclosure. Behaviour:
+
+- **PI_ON state** — PIR event published to MQTT; gateway camera service records.
+- **PI_OFF state** — if `voltage ≥ EVENT_WAKE_VOLTAGE` (configurable, between
+  `SHUTDOWN_VOLTAGE` and `RECOVERY_VOLTAGE`), wake the Pi early for recording.
+  If voltage is below `EVENT_WAKE_VOLTAGE`, the event is dropped; battery
+  protection takes priority.
+
+`EVENT_WAKE_VOLTAGE` is tuned from the field-soak dataset alongside the other
+thresholds in `pico-watchdog/firmware/config.py`.
+
+## Implementation Checklist (not started)
+
+- [ ] `pi-setup.sh` — BATMAN-adv + `bat0` configuration for all node types
+- [ ] `pi-setup.sh` — install Mosquitto on all field nodes (disabled by default)
+- [ ] `gateway-node` — grace-period status publisher + broker election coordinator
+- [ ] `field-node` — power telemetry SoC topic + broker election subscriber
+- [ ] `field-node` — dynamic MQTT client reconfiguration on broker change
+- [ ] `field-node` — local event queue (disk buffer during broker transition)
+- [ ] `pico-watchdog/firmware/mqtt_link.py` — SHUTTING_DOWN / ONLINE status publish
+- [ ] `pico-watchdog/firmware/config.py` — `EVENT_WAKE_VOLTAGE` threshold
+- [ ] `pico-watchdog/firmware/main.py` — PIR GPIO interrupt + wake logic
+
+---
+
 # Future Expansion
 
 Possible future additions:

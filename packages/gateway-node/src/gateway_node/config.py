@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     service_control: str = "dry-run"
     compose_file: str = "/opt/gateway-node/docker-compose.yml"
 
+    # Home Assistant REST API — used for graceful shutdown on CRITICAL power mode.
+    # Use the local address when gateway and HA share the same machine; use the
+    # Tailscale IP (http://100.95.222.13:8123) when they are on separate hosts.
+    # Token: HA Profile → Long-Lived Access Tokens.
+    ha_base_url: str = "http://localhost:8123"
+    ha_token: str = ""
+
     def stop_list(self, key: str) -> list[str]:
         raw = {"eco": self.eco_stop, "low": self.low_stop, "critical": self.critical_stop}[key]
         return [s.strip() for s in raw.split(",") if s.strip()]
