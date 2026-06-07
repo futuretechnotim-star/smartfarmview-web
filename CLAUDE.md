@@ -6,6 +6,23 @@ Monorepo for the SmartFarmView platform. Contains a web frontend and multiple Py
 
 **GitHub:** https://github.com/futuretechnotim-star/smartfarmview-web
 
+## Agent Handoffs
+
+At the start of any work session, check `.agents/handoffs/` for handoff files:
+
+- **Request handoffs** (`*request*` in filename) are work orders from Codex — read and implement them.
+- **Return handoffs** (`*return*` in filename) are completion reports from Codex — read for context on recent work.
+
+After completing work from a request handoff, write a return handoff in the
+same folder documenting what changed, any decisions made, and anything the next
+agent should know.
+
+**Naming convention:**
+- `YYYY-MM-DD-<topic>-request.md` — work order (either agent can write one)
+- `YYYY-MM-DD-<topic>-return.md` — completion report (written by the agent who did the work)
+
+Codex follows the same convention from its side.
+
 ## Repository Structure
 
 ```
