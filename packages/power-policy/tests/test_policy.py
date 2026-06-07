@@ -11,6 +11,7 @@ from power_policy import (
     PowerMode,
     combine_modes,
     compute_dawn_recovery_mode,
+    compute_night_mode,
     compute_solar_mode,
     evaluate_soc_mode,
     severity_index,
@@ -160,6 +161,14 @@ class TestCombineModes:
         mode, reason = combine_modes(PowerMode.ECO, None, has_solar_data=False)
         assert mode == PowerMode.ECO
         assert reason == "soc"
+
+
+class TestComputeNightMode:
+    def test_daytime_returns_none(self) -> None:
+        assert compute_night_mode(is_daytime=True) is None
+
+    def test_nighttime_returns_low(self) -> None:
+        assert compute_night_mode(is_daytime=False) == PowerMode.LOW
 
 
 class TestComputeDawnRecoveryMode:

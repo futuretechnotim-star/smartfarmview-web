@@ -9,6 +9,7 @@ from power_policy import (
     SolarStatus,
     combine_modes,
     compute_dawn_recovery_mode,
+    compute_night_mode,
     compute_solar_mode,
     evaluate_soc_mode,
     severity_index,
@@ -45,6 +46,8 @@ class PowerManager:
 
     @property
     def camera_enabled(self) -> bool:
+        if not self._is_daytime():
+            return False  # no usable light — don't wake the camera regardless of mode
         return self._mode != PowerMode.CRITICAL
 
     @property
@@ -100,6 +103,12 @@ class PowerManager:
         new_mode, reason = combine_modes(
             new_soc_mode, solar_mode, has_solar_data=net_avg is not None
         )
+
+        # Night floor: enforce LOW during dark hours (camera useless, conserve battery)
+        night_mode = compute_night_mode(is_daytime=is_day)
+        if night_mode is not None and severity_index(night_mode) > severity_index(new_mode):
+            new_mode = night_mode
+            reason = "night"
 
         # Dawn recovery: if the battery woke depleted, hold LOW until recharged
         dawn_mode = compute_dawn_recovery_mode(

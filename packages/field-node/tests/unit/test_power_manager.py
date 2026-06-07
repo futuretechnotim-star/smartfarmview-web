@@ -7,14 +7,15 @@ from field_node.power.manager import PowerManager, PowerMode
 
 @pytest.fixture
 def pm():
-    """PowerManager with system calls and solar daytime check patched out.
+    """PowerManager with system calls, daytime check, and night-mode floor patched out.
 
-    Forcing nighttime isolates SoC-based behaviour from solar projection logic,
-    which is time-of-day dependent and tested separately in TestSolarMode.
+    Forcing nighttime and suppressing the night floor isolates SoC-based behaviour
+    from time-of-day concerns, which are tested separately in TestNightMode.
     """
     with (
         patch("field_node.power.manager._apply_mode"),
         patch.object(PowerManager, "_is_daytime", return_value=False),
+        patch("field_node.power.manager.compute_night_mode", return_value=None),
     ):
         yield PowerManager()
 
@@ -113,24 +114,86 @@ class TestDawnRecovery:
         assert pm.mode == PowerMode.ECO
 
 
+class TestNightMode:
+    def test_night_floor_is_low_when_soc_is_high(self) -> None:
+        """At full battery during nighttime, mode should still be at least LOW."""
+        with (
+            patch("field_node.power.manager._apply_mode"),
+            patch.object(PowerManager, "_is_daytime", return_value=False),
+        ):
+            pm = PowerManager()
+            pm.update(100)
+        assert pm.mode == PowerMode.LOW
+
+    def test_critical_battery_at_night_stays_critical(self) -> None:
+        """Night floor does not override a battery-driven CRITICAL escalation."""
+        with (
+            patch("field_node.power.manager._apply_mode"),
+            patch.object(PowerManager, "_is_daytime", return_value=False),
+        ):
+            pm = PowerManager()
+            pm.update(10)
+        assert pm.mode == PowerMode.CRITICAL
+
+    def test_camera_disabled_at_night_regardless_of_mode(self) -> None:
+        """camera_enabled is False at night even when mode is NORMAL/ECO/LOW."""
+        with (
+            patch("field_node.power.manager._apply_mode"),
+            patch.object(PowerManager, "_is_daytime", return_value=False),
+        ):
+            pm = PowerManager()
+        assert pm.camera_enabled is False
+
+    def test_camera_enabled_during_day(self) -> None:
+        with (
+            patch("field_node.power.manager._apply_mode"),
+            patch.object(PowerManager, "_is_daytime", return_value=True),
+        ):
+            pm = PowerManager()
+            pm.update(100)
+            assert pm.camera_enabled is True
+
+
 class TestProperties:
-    def test_camera_enabled_in_normal(self, pm: PowerManager) -> None:
-        assert pm.camera_enabled is True
+    def test_camera_enabled_in_normal_daytime(self) -> None:
+        with (
+            patch("field_node.power.manager._apply_mode"),
+            patch.object(PowerManager, "_is_daytime", return_value=True),
+        ):
+            pm = PowerManager()
+            pm.update(100)
+            assert pm.camera_enabled is True
 
-    def test_camera_enabled_in_eco(self, pm: PowerManager) -> None:
-        with patch("field_node.power.manager._apply_mode"):
-            pm.update(69)
-        assert pm.camera_enabled is True
+    def test_camera_enabled_in_eco_daytime(self) -> None:
+        with (
+            patch("field_node.power.manager._apply_mode"),
+            patch.object(PowerManager, "_is_daytime", return_value=True),
+            patch("field_node.power.manager.compute_dawn_recovery_mode", return_value=None),
+        ):
+            pm = PowerManager()
+            # Force SoC into ECO range — solar_no_data would escalate to ECO anyway,
+            # but set a low SoC explicitly to test the SoC path
+            pm._soc_mode = PowerMode.ECO  # type: ignore[attr-defined]
+            pm._mode = PowerMode.ECO  # type: ignore[attr-defined]
+            assert pm.camera_enabled is True
 
-    def test_camera_enabled_in_low(self, pm: PowerManager) -> None:
-        with patch("field_node.power.manager._apply_mode"):
-            pm.update(49)
-        assert pm.camera_enabled is True
+    def test_camera_enabled_in_low_daytime(self) -> None:
+        with (
+            patch("field_node.power.manager._apply_mode"),
+            patch.object(PowerManager, "_is_daytime", return_value=True),
+        ):
+            pm = PowerManager()
+            pm._mode = PowerMode.LOW  # type: ignore[attr-defined]
+            assert pm.camera_enabled is True
 
     def test_camera_disabled_in_critical(self, pm: PowerManager) -> None:
-        with patch("field_node.power.manager._apply_mode"):
-            pm.update(24)
-        assert pm.camera_enabled is False
+        with (
+            patch("field_node.power.manager._apply_mode"),
+            patch.object(PowerManager, "_is_daytime", return_value=True),
+        ):
+            pm2 = PowerManager()
+            pm2._mode = PowerMode.CRITICAL  # type: ignore[attr-defined]
+            assert pm2.camera_enabled is False
 
     def test_camera_standby_only_in_low(self, pm: PowerManager) -> None:
         with patch("field_node.power.manager._apply_mode"):

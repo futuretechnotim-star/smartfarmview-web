@@ -146,6 +146,18 @@ def compute_solar_mode(
     )
 
 
+def compute_night_mode(*, is_daytime: bool) -> PowerMode | None:
+    """Return LOW during nighttime hours to enforce minimum power conservation.
+
+    Camera is useless in the dark so there is no reason to run at NORMAL or ECO
+    overnight. LOW gives: CPU powersave, WiFi PSM, and slow telemetry (300 s),
+    without signalling a battery emergency (CRITICAL).
+    """
+    if is_daytime:
+        return None
+    return PowerMode.LOW
+
+
 def compute_dawn_recovery_mode(
     *,
     dawn_soc_pct: int | None,
