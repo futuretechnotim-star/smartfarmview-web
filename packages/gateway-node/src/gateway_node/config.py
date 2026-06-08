@@ -49,6 +49,14 @@ class Settings(BaseSettings):
     service_control: str = "dry-run"
     compose_file: str = "/opt/gateway-node/docker-compose.yml"
 
+    # Camera (Camera Module 3 attached to Pi 5 CSI port).
+    capture_dir: str = "/opt/gateway-node/captures"
+    capture_width: int = 2328
+    capture_height: int = 1748
+    camera_framerate: int = 30
+    # How often to publish a snapshot unprompted (seconds). 0 = on-demand only.
+    camera_snapshot_interval_seconds: int = 300
+
     # Home Assistant REST API — used for graceful shutdown on CRITICAL power mode.
     # Use the local address when gateway and HA share the same machine; use the
     # Tailscale IP (http://100.95.222.13:8123) when they are on separate hosts.

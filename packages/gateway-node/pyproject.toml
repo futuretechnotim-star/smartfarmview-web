@@ -21,6 +21,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+hardware = [
+    "picamera2>=0.3",
+]
 dev = [
     "pytest>=7.4",
     "pytest-mock>=3.12",
@@ -52,5 +55,5 @@ strict = true
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["paho.*"]
+module = ["paho.*", "picamera2.*"]
 ignore_missing_imports = true
