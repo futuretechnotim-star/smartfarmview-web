@@ -46,6 +46,7 @@ HA always gets first chance to act gracefully. See
 | Battery | EcoWorthy 12.8V 20Ah LiFePO4 | 256 Wh nominal, ~205 Wh usable |
 | Power controller | Raspberry Pi Pico 2 W | gates Pi 5V, watchdog, wake-on-recharge |
 | Uplink + GNSS | Waveshare SIM7600G-H **4G Dongle** | USB plug-in; 4G/3G/2G global bands; GPS/BeiDou/Glonass/LBS; AT&T compatible |
+| Field node WiFi AP | BrosTrend AC5L USB adapter | RTL8821CU — in-kernel `rtw88_8821cu` driver (no DKMS); wlan1; 2.4GHz AP for field nodes |
 | RTK base station | SparkFun ZED-F9P (roadmap) | see [RTK section](#rtk-base-station--roadmap) |
 
 ### Uplink + GNSS (SIM7600G-H 4G Dongle)
@@ -55,24 +56,34 @@ is off when the Pi is off. This is intentional: the Pico's safety loop is fully
 autonomous and never needs the internet; the cellular uplink is only needed when
 the Pi is running (remote access, OTA, HA relay, telemetry sync).
 
-On Pi OS the dongle enumerates as a USB CDC-ECM/RNDIS network adapter +
-several serial ports. The standard integration stack:
+On Pi OS the dongle enumerates in QMI mode (`qmi_wwan` driver) — one `cdc-wdm0`
+control device, a `wwan0` network interface, and five serial ports.
 
 ```
-ModemManager   → manages modem state, SIM, bearer (AT&T LTE)
-NetworkManager → manages wwan0, sets default route
-gpsd           → reads NMEA from /dev/ttyUSB_gnss (stable udev name)
+ModemManager   → detects modem via udev; exposes DBus API
+qmi-network    → starts QMI data session; assigns IP to wwan0 (metric 700)
+wwan0.service  → systemd unit: udev trigger → qmi-network → ip addr/route
+gpsd           → reads NMEA from /dev/ttyUSB_gnss (stable udev symlink)
 chrony         → uses gpsd as stratum-1 NTP source for the mesh
 ```
 
-Typical port assignments (set stable udev names in `pi-setup.sh` to avoid
-index shifts on reboot):
+**Port assignments** (stable udev symlinks in `/etc/udev/rules.d/99-sim7600.rules`):
 
-| Port | Function |
-|---|---|
-| `ttyUSB0` | AT commands (ModemManager) |
-| `ttyUSB1` | NMEA / GNSS stream (`gpsd`) |
-| `ttyUSB2` | Diagnostic |
+| Physical port | Stable symlink | Function |
+|---|---|---|
+| `ttyUSB0` | — | QCDM diagnostic |
+| `ttyUSB1` | `/dev/ttyUSB_gnss` | NMEA / GNSS stream (`gpsd`) |
+| `ttyUSB2` | `/dev/ttyUSB_at` | AT primary (ModemManager) |
+| `ttyUSB3` | — | AT secondary |
+| `cdc-wdm0` | — | QMI control (`qmi-network`, `qmicli`) |
+
+**AT&T LTE connection** — APN `nxtgenphone`, registered on home network (operator 310410).
+wwan0 IP is dynamic (AT&T-assigned /29); `wwan-up.sh` queries `qmicli --wds-get-current-settings`
+on each connect. wlan0 stays the preferred WAN at metric 600; wwan0 is fallback at metric 700.
+
+**Boot quirk:** ModemManager misses the modem's udev events if the dongle is already plugged
+when MM starts. `wwan0.service` runs `udevadm trigger --sysname-match=ttyUSB*` before calling
+`qmi-network` to work around this.
 
 The dongle's GNSS provides **coarse position + time** (GPS/BeiDou/Glonass).
 This is sufficient for `gpsd`/`chrony` (stratum-1 NTP for the mesh) and a
@@ -171,13 +182,39 @@ battery and MPPT, TBC by data).
 6. **Field soak:** deploy and log a multi-day dataset across weather; review daily
    Wh + cutoff/recovery frequency to size production.
 
+### Field node WiFi AP (BrosTrend AC5L / wlan1)
+
+The external USB adapter is the field-node access point. The Pi's onboard wlan0 is
+a WiFi client (WebsterFiber or Starlink). Keeping them separate means the AP never
+competes with the WAN uplink for airtime or channel.
+
+| Setting | Value |
+|---|---|
+| SSID | `sfv-fieldmesh` |
+| Band | 2.4 GHz, channel 6 (best range for farm distances) |
+| Security | WPA2-PSK |
+| Gateway IP | `192.168.50.1/24` |
+| DHCP range | `192.168.50.10 – 192.168.50.50` |
+| Lease time | 12 h |
+
+Services involved: `sfv-ap.service` (assigns 192.168.50.1 to wlan1) →
+`hostapd.service` (config: `/etc/hostapd/hostapd.conf`) →
+`dnsmasq.service` (config: `/etc/dnsmasq.d/sfv-fieldmesh.conf`).
+
+NetworkManager is told to leave wlan1 alone via
+`/etc/NetworkManager/conf.d/unmanaged-wlan1.conf`.
+
+Field nodes connecting to `sfv-fieldmesh` are NAT-masqueraded out through
+whichever WAN interface has a default route (wlan0 preferred, wwan0 fallback).
+IP forwarding is enabled in `/etc/sysctl.d/90-sfv-forward.conf`; NAT rules
+are persisted by `iptables-persistent`.
+
 ## Open items
 - Confirm ECO-WORTHY Modbus register map (voltage/current indices + scaling).
 - Tune gate thresholds + LiFePO4 SoC curve from the field-soak dataset.
 - Pick the 12V→5V buck (5A+, switchable EN) for Pi 5 peaks.
 - Tailscale-on-Pico is not native — remote access is Pi-proxied (see
   [`pico-watchdog.md`](pico-watchdog.md)).
-- Add `pi-setup.sh` phase for ModemManager, NetworkManager, `gpsd`, `chrony`,
-  and udev stable names for the SIM7600G-H USB ports.
+- Wire up `gpsd` + `chrony` to `/dev/ttyUSB_gnss` for mesh NTP stratum-1.
 - **Roadmap:** SparkFun ZED-F9P RTK base station + `str2str` NTRIP/mesh broadcast
   (same receiver as the LandPlan survey stick; see RTK section above).

@@ -375,7 +375,128 @@ sudo systemctl start gateway-power
 
 Generate the HA token at **Profile → Long-Lived Access Tokens**. Keep it secret.
 
-### Step 11 — Verify
+### Step 11 — LTE uplink (SIM7600G-H)
+
+Install ModemManager and QMI tools, then set up the persistent `wwan0` connection:
+
+```bash
+sudo apt install -y modemmanager libmbim-utils libqmi-utils
+
+# Stable udev symlinks for AT and GNSS ports
+sudo tee /etc/udev/rules.d/99-sim7600.rules << 'EOF'
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1e0e", ATTRS{idProduct}=="9001", ENV{.MM_USBIFNUM}=="01", SYMLINK+="ttyUSB_gnss"
+SUBSYSTEM=="tty", ATTRS{idVendor}=="1e0e", ATTRS{idProduct}=="9001", ENV{.MM_USBIFNUM}=="02", SYMLINK+="ttyUSB_at"
+EOF
+sudo udevadm control --reload-rules
+sudo udevadm trigger --action=add --sysname-match='ttyUSB*'
+ls -la /dev/ttyUSB_*   # expect ttyUSB_at → ttyUSB2, ttyUSB_gnss → ttyUSB1
+
+# APN config
+echo 'APN=nxtgenphone' | sudo tee /etc/qmi-network.conf
+
+# Deploy wwan-up.sh from the repo, enable service
+rsync -a -e "ssh -i ~/.ssh/gateway_deploy" packages/gateway-node/scripts/wwan-up.sh techno@sfv-gateway.local:/opt/gateway-node/scripts/
+ssh -i ~/.ssh/gateway_deploy techno@sfv-gateway.local "sudo chmod +x /opt/gateway-node/scripts/wwan-up.sh && sudo systemctl enable --now wwan0"
+```
+
+Verify LTE:
+```bash
+mmcli -m any | grep -E 'state|operator|signal'
+# expected: state=registered, operator=AT&T, signal ~80%
+ip addr show wwan0        # expect 10.x.x.x/29
+curl --interface wwan0 -s https://ifconfig.me  # returns public LTE IP
+```
+
+> **Boot quirk:** ModemManager misses the modem udev events if the dongle is already
+> plugged when MM starts. `wwan-up.sh` runs `udevadm trigger` first to work around this.
+
+### Step 12 — Field node WiFi AP (BrosTrend AC5L)
+
+The AC5L uses chip RTL8821CU — **in-kernel** since kernel 6.12 via `rtw88_8821cu`.
+No DKMS build needed on Pi OS with kernel 6.18+. Verify the driver is loaded:
+
+```bash
+cat /sys/class/net/wlan1/device/uevent | grep DRIVER
+# expect: DRIVER=rtw88_8821cu
+```
+
+Install hostapd and dnsmasq, then deploy configs from the repo:
+
+```bash
+sudo apt install -y hostapd dnsmasq iptables-persistent
+
+# Tell NetworkManager to leave wlan1 alone
+sudo tee /etc/NetworkManager/conf.d/unmanaged-wlan1.conf << 'EOF'
+[keyfile]
+unmanaged-devices=interface-name:wlan1
+EOF
+
+# hostapd AP config
+sudo tee /etc/hostapd/hostapd.conf << 'EOF'
+interface=wlan1
+driver=nl80211
+ssid=sfv-fieldmesh
+hw_mode=g
+channel=6
+ieee80211n=1
+wmm_enabled=1
+ht_capab=[HT40][SHORT-GI-20][SHORT-GI-40]
+auth_algs=1
+wpa=2
+wpa_key_mgmt=WPA-PSK
+rsn_pairwise=CCMP
+wpa_passphrase=sfv-fieldmesh-2026
+country_code=US
+EOF
+
+# dnsmasq DHCP for field nodes
+sudo tee /etc/dnsmasq.d/sfv-fieldmesh.conf << 'EOF'
+interface=wlan1
+bind-interfaces
+dhcp-range=192.168.50.10,192.168.50.50,255.255.255.0,12h
+dhcp-option=3,192.168.50.1
+dhcp-option=6,192.168.50.1
+EOF
+
+# Static IP for wlan1 — must be up before hostapd/dnsmasq
+sudo tee /etc/systemd/system/sfv-ap.service << 'EOF'
+[Unit]
+Description=SFV Field Node WiFi AP (wlan1)
+After=network.target
+Before=hostapd.service dnsmasq.service
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/sbin/ip addr add 192.168.50.1/24 dev wlan1
+ExecStart=/sbin/ip link set wlan1 up
+ExecStop=/sbin/ip addr flush dev wlan1
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# IP forwarding and NAT
+echo 'net.ipv4.ip_forward=1' | sudo tee /etc/sysctl.d/90-sfv-forward.conf
+sudo sysctl -p /etc/sysctl.d/90-sfv-forward.conf
+sudo iptables -t nat -A POSTROUTING -s 192.168.50.0/24 -o wlan0 -j MASQUERADE
+sudo iptables -t nat -A POSTROUTING -s 192.168.50.0/24 -o wwan0 -j MASQUERADE
+sudo iptables -A FORWARD -i wlan1 -o wlan0 -j ACCEPT
+sudo iptables -A FORWARD -i wlan1 -o wwan0 -j ACCEPT
+sudo iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
+sudo netfilter-persistent save
+
+sudo systemctl daemon-reload
+sudo systemctl unmask hostapd
+sudo systemctl enable --now sfv-ap hostapd dnsmasq
+```
+
+Verify:
+```bash
+systemctl is-active sfv-ap hostapd dnsmasq   # all: active
+/usr/sbin/iw dev wlan1 info | grep -E 'ssid|channel|type'
+# expect: ssid sfv-fieldmesh, channel 6, type AP
+```
+
+### Step 13 — Verify gateway power brain
 
 ```bash
 sudo systemctl status gateway-power --no-pager
