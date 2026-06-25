@@ -45,10 +45,26 @@ class PowerManager:
         return self._solar_status
 
     @property
-    def camera_enabled(self) -> bool:
+    def motion_capture_enabled(self) -> bool:
+        """True when PIR motion events should trigger a capture.
+
+        False at night (no usable light) and in CRITICAL mode (battery conservation
+        takes priority — periodic captures run instead via periodic_capture_interval_s).
+        """
         if not self._is_daytime():
-            return False  # no usable light — don't wake the camera regardless of mode
+            return False
         return self._mode != PowerMode.CRITICAL
+
+    @property
+    def periodic_capture_interval_s(self) -> int | None:
+        """Seconds between forced check-in captures in CRITICAL mode, or None.
+
+        Returns None in all modes except CRITICAL (daytime), where motion capture
+        is suppressed and a periodic image + detection keeps the node observable.
+        """
+        if self._mode == PowerMode.CRITICAL and self._is_daytime():
+            return settings.critical_capture_interval_s
+        return None
 
     @property
     def camera_standby_between_captures(self) -> bool:

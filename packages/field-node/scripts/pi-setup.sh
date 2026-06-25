@@ -47,8 +47,14 @@ fi
 # ---------------------------------------------------------------------------
 echo "==> Phase 2: Enable I2C (required for INA219 power monitor)"
 # ---------------------------------------------------------------------------
-sudo raspi-config nonint do_i2c 0
-echo "  I2C enabled (reboot required before /dev/i2c-1 appears on a fresh install)"
+I2C_CHANGED=0
+if [ ! -e /dev/i2c-1 ]; then
+    sudo raspi-config nonint do_i2c 0
+    I2C_CHANGED=1
+    echo "  I2C enabled — reboot required to activate /dev/i2c-1"
+else
+    echo "  I2C already active (/dev/i2c-1 present)"
+fi
 
 # ---------------------------------------------------------------------------
 echo "==> Phase 3: User groups (video + i2c)"
@@ -117,6 +123,8 @@ techno ALL=(ALL) NOPASSWD: /usr/bin/tee /sys/devices/system/cpu/cpu3/cpufreq/sca
 # Power management: WiFi PSM
 techno ALL=(ALL) NOPASSWD: /usr/sbin/iwconfig wlan0 power on
 techno ALL=(ALL) NOPASSWD: /usr/sbin/iwconfig wlan0 power off
+# Remote reboot (e.g. after pi-setup.sh enables I2C or camera overlay)
+techno ALL=(ALL) NOPASSWD: /usr/sbin/reboot
 EOF
 sudo chmod 440 "$SUDOERS_FILE"
 sudo visudo -cf "$SUDOERS_FILE" && echo "  sudoers rules installed/updated" \
@@ -211,8 +219,12 @@ echo "  2. Add node to infra/nodes.json and push — all future updates are auto
 # change and never reboot — so the GitHub Actions deploy is unaffected once the
 # overlay is in place. A loaded sensor overlay requires a reboot to take effect.
 # ---------------------------------------------------------------------------
-if [ "${CAMERA_CHANGED:-0}" -eq 1 ]; then
+if [ "${CAMERA_CHANGED:-0}" -eq 1 ] || [ "${I2C_CHANGED:-0}" -eq 1 ]; then
     echo ""
-    echo "==> Camera overlay changed — rebooting now to load the sensor driver."
+    REASONS=()
+    [ "${CAMERA_CHANGED:-0}" -eq 1 ] && REASONS+=("camera overlay")
+    [ "${I2C_CHANGED:-0}" -eq 1 ] && REASONS+=("I2C")
+    REASON_STR=$(IFS=", "; echo "${REASONS[*]}")
+    echo "==> ${REASON_STR} changed — rebooting now to activate hardware."
     sudo reboot
 fi

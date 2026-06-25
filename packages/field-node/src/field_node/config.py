@@ -81,5 +81,10 @@ class Settings(BaseSettings):
     dawn_low_soc_threshold: int = 50
     dawn_recovery_soc: int = 65
 
+    # CRITICAL mode periodic capture — interval in seconds between forced check-in
+    # captures (with object detection) while motion-triggered captures are suppressed.
+    # 3600 = one capture per hour.
+    critical_capture_interval_s: int = 3600
+
 
 settings = Settings()

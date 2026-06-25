@@ -197,11 +197,11 @@ def main() -> None:
     detection_log: list[dict[str, object]] = _load_detection_log()
 
     def _capture() -> tuple[Path, bytes] | None:
-        """Capture a still and return (path, jpeg_bytes). Returns None if unavailable/blocked."""
+        """Motion-triggered capture. Returns None if camera unavailable or motion capture is off."""
         if camera is None:
             return None
-        if not power_manager.camera_enabled:
-            log.warning("capture_blocked", reason="critical_power_mode")
+        if not power_manager.motion_capture_enabled:
+            log.warning("capture_blocked", reason="motion_capture_disabled")
             return None
         camera.wakeup()
         path = camera.capture_still()
@@ -209,14 +209,23 @@ def main() -> None:
             camera.standby()
         return path, path.read_bytes()
 
-    def on_motion() -> None:
-        result = _capture()
-        if result is None:
-            return
-        path, jpeg_bytes = result
+    def _periodic_capture() -> tuple[Path, bytes] | None:
+        """Scheduled check-in capture in CRITICAL mode — bypasses the motion gate."""
+        if camera is None:
+            return None
+        camera.wakeup()
+        path = camera.capture_still()
+        camera.standby()
+        return path, path.read_bytes()
 
-        # Run TFLite object detection if the model is available.
-        # Suppresses events where only background motion (wind, light) triggered the PIR.
+    def _publish_capture(
+        jpeg_bytes: bytes,
+        path: Path,
+        *,
+        no_detection_summary: str,
+        suppress_if_no_detection: bool,
+    ) -> None:
+        """Run detection (if available), store the detection log event, and publish."""
         detections: list[Detection] = []
         inference_ms = 0
         if detector is not None:
@@ -230,12 +239,11 @@ def main() -> None:
             except Exception as e:
                 log.warning("detection_error", error=str(e))
 
-        if detector is not None and not detections:
+        if suppress_if_no_detection and detector is not None and not detections:
             path.unlink(missing_ok=True)
             log.info("motion_suppressed", reason="no_objects_detected")
             return
 
-        # Build and store detection log event.
         detection_id = str(uuid.uuid4())
         image_filename: str | None = _store_detection_image(detection_id, jpeg_bytes)
         detected_at = datetime.datetime.now(tz=datetime.UTC).isoformat(timespec="seconds")
@@ -243,12 +251,11 @@ def main() -> None:
         event: dict[str, object] = {
             "id": detection_id,
             "detectedAt": detected_at,
-            "summary": ", ".join(summary_parts) if summary_parts else "Motion detected",
+            "summary": ", ".join(summary_parts) if summary_parts else no_detection_summary,
             "objects": [{"label": d.label, "confidence": d.confidence} for d in detections],
             "imageFilename": image_filename,
         }
 
-        # Evict oldest entry before prepending the new one.
         if len(detection_log) >= settings.detection_store_count:
             evicted = detection_log.pop()
             _delete_detection_image(evicted)
@@ -259,8 +266,19 @@ def main() -> None:
         telemetry.publish_snapshot(jpeg_bytes)
         telemetry.publish_motion_event(str(path))
         if detections:
-            telemetry.publish_detection(detections, inference_ms=inference_ms)  # legacy topic
+            telemetry.publish_detection(detections, inference_ms=inference_ms)
         telemetry.publish_detection_log(detection_log)
+
+    def on_motion() -> None:
+        result = _capture()
+        if result is None:
+            return
+        path, jpeg_bytes = result
+        _publish_capture(
+            jpeg_bytes, path,
+            no_detection_summary="Motion detected",
+            suppress_if_no_detection=True,
+        )
 
     pir.on_motion = on_motion
     pir.on_clear = lambda: telemetry.publish_motion_clear()
@@ -279,10 +297,27 @@ def main() -> None:
     telemetry.connect()
 
     last_telemetry = 0.0
+    last_periodic_capture = 0.0
 
     try:
         while _running:
             now = time.monotonic()
+
+            # Periodic check-in capture — fires in CRITICAL mode (daytime only).
+            # Motion capture is suppressed in CRITICAL, so this is the only way
+            # the node stays observable. Always runs detection and publishes the image.
+            periodic_interval = power_manager.periodic_capture_interval_s
+            if periodic_interval is not None and now - last_periodic_capture >= periodic_interval:
+                log.info("periodic_capture_starting", interval_s=periodic_interval)
+                result = _periodic_capture()
+                last_periodic_capture = now
+                if result is not None:
+                    path, jpeg_bytes = result
+                    _publish_capture(
+                        jpeg_bytes, path,
+                        no_detection_summary="Periodic check-in",
+                        suppress_if_no_detection=False,
+                    )
 
             if now - last_telemetry >= power_manager.telemetry_interval_seconds:
                 reading: PowerReading | None = None
@@ -292,17 +327,26 @@ def main() -> None:
                     except Exception as e:
                         log.warning("power_read_error", error=str(e))
 
+                prev_mode = power_manager.mode
                 if reading is not None:
                     power_manager.update(reading.soc_pct, reading.current_ma)
-                    if not power_manager.camera_enabled and camera is not None:
-                        camera.standby()
 
+                # Put camera in standby on transition into CRITICAL/night — but run
+                # picamera2.stop() in a daemon thread so the main loop doesn't block.
+                # picamera2.stop() can take multiple seconds completing C++ teardown.
+                mode_changed = power_manager.mode != prev_mode
+                if mode_changed and not power_manager.motion_capture_enabled and camera is not None:
+                    import threading
+                    threading.Thread(target=camera.standby, daemon=True).start()
+
+                log.info("heartbeat_publishing")
                 telemetry.publish_heartbeat(
                     power=reading,
                     power_mode=power_manager.mode.value,
                     solar_status=power_manager.solar_status,
                     camera_ok=camera is not None,
                 )
+                log.info("heartbeat_published")
                 last_telemetry = now
 
             time.sleep(1)
