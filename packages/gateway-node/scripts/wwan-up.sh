@@ -1,15 +1,22 @@
 #!/bin/bash
 # Bring up LTE data connection on wwan0 via QMI.
-# Called by wwan0.service on boot.
+# Called by wwan0.service on boot. ModemManager must be masked — direct QMI
+# access conflicts with MM holding the device.
 set -e
 
 DEV=/dev/cdc-wdm0
 IFACE=wwan0
 AT_PORT=/dev/ttyUSB_at
 
-# Ensure ModemManager has detected the modem (may need a udev nudge at boot)
-udevadm trigger --action=add --sysname-match='ttyUSB*'
-sleep 5
+# raw_ip=Y is required for QMI bearer IP assignment (non-Ethernet framing).
+# Belt-and-suspenders: wwan0-raw-ip.service sets this via udev, but we set it
+# here too in case the service races against our own startup.
+if [ -f "/sys/class/net/${IFACE}/qmi/raw_ip" ]; then
+    echo Y > "/sys/class/net/${IFACE}/qmi/raw_ip"
+fi
+
+# Clean up any lingering QMI session state from a previous (failed) run.
+qmi-network "$DEV" stop 2>/dev/null || true
 
 # Start QMI data session
 qmi-network "$DEV" start

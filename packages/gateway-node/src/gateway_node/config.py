@@ -49,13 +49,15 @@ class Settings(BaseSettings):
     service_control: str = "dry-run"
     compose_file: str = "/opt/gateway-node/docker-compose.yml"
 
-    # Camera (Camera Module 3 attached to Pi 5 CSI port).
+    # Camera (Camera Module 3 Wide attached to Pi 5 CSI port).
     capture_dir: str = "/opt/gateway-node/captures"
     capture_width: int = 2328
     capture_height: int = 1748
     camera_framerate: int = 30
     # How often to publish a snapshot unprompted (seconds). 0 = on-demand only.
     camera_snapshot_interval_seconds: int = 300
+    # HTTP port for the MJPEG stream service (gateway-camera.service).
+    camera_stream_port: int = 8765
 
     # Home Assistant REST API — used for graceful shutdown on CRITICAL power mode.
     # Use the local address when gateway and HA share the same machine; use the

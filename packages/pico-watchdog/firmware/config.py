@@ -16,22 +16,28 @@ GRACE_SECONDS = 90  # max time to wait for the Pi to halt after SHUTDOWN_REQ
 HEARTBEAT_TIMEOUT_S = 300  # no Pi heartbeat for this long (while ON) → reboot
 
 # --- GPIO pin map (BCM/GP numbering on the Pico) ----------------------------
-PIN_PI_POWER_EN = 15  # drives the 5V buck ENABLE / high-side load switch
+PIN_PI_POWER_EN = 15   # drives the 5V buck ENABLE / high-side load switch
 PIN_SHUTDOWN_REQ = 14  # asserted high to ask the Pi to begin a clean shutdown
-PIN_BATTERY_ADC = 26  # ADC0 — divided battery voltage (backup if RS485 fails)
-PIN_RS485_TX = 4  # UART1 TX → MAX485 DI
-PIN_RS485_RX = 5  # UART1 RX ← MAX485 RO
-PIN_RS485_DE = 6  # MAX485 DE/RE (high = transmit, low = receive)
+PIN_BATTERY_ADC = 26   # ADC0 — divided battery voltage (fallback if I2C fails)
 
-# Battery ADC divider ratio (Vbattery / Vadc) — set to match your resistor pair.
+# I2C0 — INA3221 voltage sensor (GODIYMODULES Mod-INA3221-002)
+PIN_I2C_SDA = 4        # GP4 = I2C0 SDA
+PIN_I2C_SCL = 5        # GP5 = I2C0 SCL
+I2C_FREQ = 400_000
+INA3221_ADDR = 0x40    # ADDR pin → GND (default on most breakout boards)
+
+# Channel assignments (both IN+ and IN- shorted together for voltage-only on CH1/CH3;
+# CH2 is in-line through the 0.1 Ω onboard shunt for 5V load current up to 1.638 A)
+INA3221_CH_BATTERY = 1   # CH1: battery 12V rail (voltage only)
+INA3221_CH_LOAD_5V = 2   # CH2: 5V buck output → Pi 5 (voltage + current ≤ 1.638 A)
+INA3221_CH_SOLAR   = 3   # CH3: solar panel terminals (voltage only)
+INA3221_CHANNEL = INA3221_CH_BATTERY  # primary channel used by gate_logic.py
+
+# ADC fallback: voltage divider ratio (Vbattery / Vadc).
+# Default assumes 100 kΩ / 10 kΩ divider → ratio 11.0 (12 V → 1.09 V).
+# Adjust if different resistors are fitted.
 ADC_DIVIDER_RATIO = 11.0
 ADC_REF_VOLTAGE = 3.3
-
-# --- RS485 / Modbus (ECO-WORTHY PWM controller) -----------------------------
-RS485_BAUD = 9600
-MODBUS_SLAVE_ID = 1
-MODBUS_READ_ADDR = 0  # holding-register base; read a block and decode
-MODBUS_READ_COUNT = 16
 
 # --- MQTT topics ------------------------------------------------------------
 TELEMETRY_TOPIC = b"securitymesh/gateway/pico/telemetry"
