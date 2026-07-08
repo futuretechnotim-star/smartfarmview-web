@@ -50,9 +50,13 @@ ip addr add "${ADDR}/${PREFIX}" dev "$IFACE"
 # Add default route at metric 700 (wlan0 at 600 is preferred)
 ip route add default via "$GW" dev "$IFACE" metric 700 2>/dev/null || true
 
-# Push DNS to resolv.conf if not already present
-if [ -n "$DNS" ] && ! grep -q "$DNS" /etc/resolv.conf 2>/dev/null; then
-  echo "nameserver $DNS" | tee -a /etc/resolv.conf > /dev/null
+# Register DNS with systemd-resolved. /etc/resolv.conf is a symlink to
+# resolved's stub file on this system — appending to it directly is silently
+# ignored/overwritten, so wwan0 never gets a resolver and DNS (and anything
+# depending on it, e.g. NTP) breaks until this is set explicitly per-link.
+if [ -n "$DNS" ] && command -v resolvectl >/dev/null 2>&1; then
+  resolvectl dns "$IFACE" "$DNS"
+  resolvectl domain "$IFACE" '~.'
 fi
 
 echo "wwan0 up: ${ADDR}/${PREFIX} gw=${GW} dns=${DNS}"
