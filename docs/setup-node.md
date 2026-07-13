@@ -391,12 +391,33 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger --action=add --sysname-match='ttyUSB*'
 ls -la /dev/ttyUSB_*   # expect ttyUSB_at → ttyUSB2, ttyUSB_gnss → ttyUSB1
 
-# APN config
-echo 'APN=nxtgenphone' | sudo tee /etc/qmi-network.conf
+# APN config — IP_TYPE=4 forces an IPv4 bearer. Without it, a reconnect can
+# come up IPv6-only depending on carrier/tower state, which wwan-up.sh can't
+# parse (it only reads the IPv4 fields from wds-get-current-settings) and
+# fails with "any valid prefix is expected rather than '/0'".
+sudo tee /etc/qmi-network.conf << 'EOF'
+APN=nxtgenphone
+IP_TYPE=4
+EOF
 
-# Deploy wwan-up.sh from the repo, enable service
-rsync -a -e "ssh -i ~/.ssh/gateway_deploy" packages/gateway-node/scripts/wwan-up.sh techno@sfv-gateway.local:/opt/gateway-node/scripts/
-ssh -i ~/.ssh/gateway_deploy techno@sfv-gateway.local "sudo chmod +x /opt/gateway-node/scripts/wwan-up.sh && sudo systemctl enable --now wwan0"
+# Deploy wwan-up.sh from the repo. wwan0.service invokes it from
+# /usr/local/bin, not the package's own scripts/ dir under /opt.
+scp -i ~/.ssh/gateway_deploy packages/gateway-node/scripts/wwan-up.sh techno@sfv-gateway.local:/tmp/wwan-up.sh
+ssh -i ~/.ssh/gateway_deploy techno@sfv-gateway.local "sudo install -m 755 -o root -g root /tmp/wwan-up.sh /usr/local/bin/wwan-up.sh && rm /tmp/wwan-up.sh && sudo systemctl enable --now wwan0"
+
+# wwan0.service is a oneshot — it only runs wwan-up.sh once at boot. If the
+# modem drops and re-enumerates mid-session (seen after a marginal power
+# event), nothing re-triggers it. Deploy the watchdog timer that periodically
+# checks wwan0 for a default route and restarts wwan0.service if it's gone:
+scp -i ~/.ssh/gateway_deploy packages/gateway-node/scripts/wwan-watchdog.sh packages/gateway-node/scripts/wwan-watchdog.service packages/gateway-node/scripts/wwan-watchdog.timer techno@sfv-gateway.local:/tmp/
+ssh -i ~/.ssh/gateway_deploy techno@sfv-gateway.local "
+  sudo install -m 755 -o root -g root /tmp/wwan-watchdog.sh /usr/local/bin/wwan-watchdog.sh
+  sudo install -m 644 -o root -g root /tmp/wwan-watchdog.service /etc/systemd/system/wwan-watchdog.service
+  sudo install -m 644 -o root -g root /tmp/wwan-watchdog.timer /etc/systemd/system/wwan-watchdog.timer
+  rm /tmp/wwan-watchdog.sh /tmp/wwan-watchdog.service /tmp/wwan-watchdog.timer
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now wwan-watchdog.timer
+"
 ```
 
 Verify LTE:
