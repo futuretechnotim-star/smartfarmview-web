@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodically re-evaluate backhaul link quality
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

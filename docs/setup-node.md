@@ -418,6 +418,21 @@ ssh -i ~/.ssh/gateway_deploy techno@sfv-gateway.local "
   sudo systemctl daemon-reload
   sudo systemctl enable --now wwan-watchdog.timer
 "
+
+# Quality-based selection between wlan0 and wwan0 — pings through whichever
+# interfaces currently have a default route and reorders metrics so the
+# healthiest one is primary. See docs/gateway-node.md#backhaul-selection-wlan0-vs-wwan0
+# for the full design (latency bias toward wlan0, hysteresis, route-drift
+# self-healing against NetworkManager).
+scp -i ~/.ssh/gateway_deploy packages/gateway-node/scripts/backhaul-select.sh packages/gateway-node/scripts/backhaul-select.service packages/gateway-node/scripts/backhaul-select.timer techno@sfv-gateway.local:/tmp/
+ssh -i ~/.ssh/gateway_deploy techno@sfv-gateway.local "
+  sudo install -m 755 -o root -g root /tmp/backhaul-select.sh /usr/local/bin/backhaul-select.sh
+  sudo install -m 644 -o root -g root /tmp/backhaul-select.service /etc/systemd/system/backhaul-select.service
+  sudo install -m 644 -o root -g root /tmp/backhaul-select.timer /etc/systemd/system/backhaul-select.timer
+  rm /tmp/backhaul-select.sh /tmp/backhaul-select.service /tmp/backhaul-select.timer
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now backhaul-select.timer
+"
 ```
 
 Verify LTE:
