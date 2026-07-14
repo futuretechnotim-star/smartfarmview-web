@@ -205,9 +205,100 @@ NetworkManager is told to leave wlan1 alone via
 `/etc/NetworkManager/conf.d/unmanaged-wlan1.conf`.
 
 Field nodes connecting to `sfv-fieldmesh` are NAT-masqueraded out through
-whichever WAN interface has a default route (wlan0 preferred, wwan0 fallback).
-IP forwarding is enabled in `/etc/sysctl.d/90-sfv-forward.conf`; NAT rules
-are persisted by `iptables-persistent`.
+whichever WAN interface `backhaul-select` (below) has currently chosen as
+primary. IP forwarding is enabled in `/etc/sysctl.d/90-sfv-forward.conf`; NAT
+rules are persisted by `iptables-persistent`.
+
+### Backhaul selection (`wlan0` vs `wwan0`)
+
+The gateway carries both WiFi (WebsterFiber/Starlink) and LTE default routes
+simultaneously. A static metric priority isn't enough on its own — a route can
+stay "up" while the link behind it is completely dead (this is exactly what
+happened during a WebsterFiber outage: the wlan0 route never went away, so
+nothing ever failed over). Two systemd timers close that gap:
+
+- **`wwan-watchdog.timer`** (every 2 min) — `wwan0.service` is a oneshot that
+  only runs `wwan-up.sh` once at boot. If the LTE modem drops and
+  re-enumerates mid-session (seen after a marginal power event), nothing
+  re-triggers it; the watchdog restarts `wwan0.service` if `wwan0` has no
+  default route.
+- **`backhaul-select.timer`** (every 30 s) — pings 1.1.1.1/8.8.8.8 through
+  each interface that currently has a default route, and reorders route
+  metrics so the healthiest one is primary. It never creates or deletes a
+  route, only reorders metrics that already exist, so a bug in it can't leave
+  the box with zero path out. `wlan0` gets a latency bias
+  (`PREFERRED_LATENCY_BIAS_MS`) so a few milliseconds' difference doesn't
+  bounce primary onto metered LTE when both links are actually healthy — only
+  real loss or a large latency gap triggers a switch. Switches away from a
+  merely-degraded (not dead) primary require 3 consecutive worse checks
+  (~90 s) to avoid flapping on a transient blip; total loss switches
+  immediately.
+- Both scripts live in `packages/gateway-node/scripts/`. On every cycle,
+  `backhaul-select` also fully re-asserts its chosen route ordering (not just
+  on a change) — NetworkManager re-asserts its own DHCP-learned metric on
+  `wlan0` independently of this script, which would otherwise silently drift
+  the routing table back out of sync between cycles.
+- `wlan0` does **not** reliably auto-reconnect to a saved WiFi network on its
+  own once it comes back into range after being down — a known gap, not yet
+  automated. `sudo nmcli connection up 'Supervisor wlan0'` forces it.
+
+### Field-node MQTT / HA / media integration
+
+Field nodes point `FIELD_NODE_MQTT_HOST` at the gateway's Tailscale IP and
+authenticate as a dedicated `field-node` Mosquitto login (HA discovery then
+registers them automatically in the gateway's own Home Assistant — no extra
+config needed beyond MQTT). Detection images are stored via
+`FIELD_NODE_HA_SMB_HOST` pointing at the gateway's Samba `media` share.
+
+Both the Mosquitto and Samba HA add-ons authenticate against **Home
+Assistant's own user database via the Supervisor API** — editing their
+`options.json` on disk directly (even with a container restart) does *not*
+take effect; the add-on's `cont-init` step queries Supervisor's API for
+authoritative config, not the file. To change either add-on's config:
+
+```bash
+# from inside the add-on's own container, using its own SUPERVISOR_TOKEN
+docker exec -i addon_core_<mosquitto|samba> sh -c \
+  'curl -s -X POST -H "Authorization: Bearer $SUPERVISOR_TOKEN" \
+   -H "Content-Type: application/json" -d @- \
+   http://supervisor/addons/self/options' <<< '{"options": {...}}'
+ha apps restart core_<mosquitto|samba>
+```
+
+(`docker exec` needs `-i` to forward stdin, easy to miss — without it,
+Supervisor accepts the request and returns `{"result":"ok"}` but the body
+never actually arrives, so nothing changes.)
+
+The Samba add-on itself only binds to whichever interface it auto-detects as
+"the" LAN interface (`wlan0` here) — not `wlan1` or `tailscale0` — with no
+config option to add more. Rather than patch the add-on's internal detection
+logic, a `PREROUTING` DNAT rule redirects incoming SMB traffic from those
+interfaces to the add-on's own `127.0.0.1:445` listener (`route_localnet`
+must be enabled for DNAT-to-loopback to work). Its `allow_hosts` ACL also
+needed Tailscale's CGNAT range (`100.64.0.0/10`) added — the default only
+covers RFC1918 ranges, which doesn't include Tailscale IPs even though it
+does cover the `sfv-fieldmesh` NAT subnet (`192.168.50.0/24` is inside
+`192.168.0.0/16`).
+
+### Field node network provisioning (cloud-init)
+
+Field nodes provision networking via cloud-init (`ds=nocloud`), reading
+`network-config` from the boot partition (`/boot/firmware/network-config`).
+By default, cloud-init's network stage only applies on the *first* boot of a
+given `instance-id` (`updates.network.when` defaults to
+`boot-new-instance`) — editing `network-config` later and rebooting has **no
+effect**, silently, on an already-provisioned node. A drop-in
+(`/etc/cloud/cloud.cfg.d/99-network-updates.cfg`, `updates: network: when:
+['boot']`) makes it re-apply on every boot, which matters for remotely
+patching a field node's WiFi credentials without re-imaging.
+
+In practice, adding a network directly via `nmcli device wifi connect
+<ssid> password <pw>` (as `techno`) has proven the more reliable path for a
+one-off change — it persists across reboots on its own (unlike a raw
+`.nmconnection` file dropped into `/etc/NetworkManager/system-connections/`,
+which cloud-init's own network regeneration silently wipes on the next boot
+regardless of the `when: boot` setting above, since it doesn't know about
+files it didn't create).
 
 ## Open items
 - Confirm ECO-WORTHY Modbus register map (voltage/current indices + scaling).
