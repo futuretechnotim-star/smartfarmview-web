@@ -1,0 +1,7 @@
+[Unit]
+Description=Check wwan0 uplink and restart wwan0.service if it has dropped
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/wwan-watchdog.sh
