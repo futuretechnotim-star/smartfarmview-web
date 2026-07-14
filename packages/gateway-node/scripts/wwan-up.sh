@@ -1,15 +1,22 @@
 #!/bin/bash
 # Bring up LTE data connection on wwan0 via QMI.
-# Called by wwan0.service on boot.
+# Called by wwan0.service on boot. ModemManager must be masked — direct QMI
+# access conflicts with MM holding the device.
 set -e
 
 DEV=/dev/cdc-wdm0
 IFACE=wwan0
 AT_PORT=/dev/ttyUSB_at
 
-# Ensure ModemManager has detected the modem (may need a udev nudge at boot)
-udevadm trigger --action=add --sysname-match='ttyUSB*'
-sleep 5
+# raw_ip=Y is required for QMI bearer IP assignment (non-Ethernet framing).
+# Belt-and-suspenders: wwan0-raw-ip.service sets this via udev, but we set it
+# here too in case the service races against our own startup.
+if [ -f "/sys/class/net/${IFACE}/qmi/raw_ip" ]; then
+    echo Y > "/sys/class/net/${IFACE}/qmi/raw_ip"
+fi
+
+# Clean up any lingering QMI session state from a previous (failed) run.
+qmi-network "$DEV" stop 2>/dev/null || true
 
 # Start QMI data session
 qmi-network "$DEV" start
@@ -43,9 +50,13 @@ ip addr add "${ADDR}/${PREFIX}" dev "$IFACE"
 # Add default route at metric 700 (wlan0 at 600 is preferred)
 ip route add default via "$GW" dev "$IFACE" metric 700 2>/dev/null || true
 
-# Push DNS to resolv.conf if not already present
-if [ -n "$DNS" ] && ! grep -q "$DNS" /etc/resolv.conf 2>/dev/null; then
-  echo "nameserver $DNS" | tee -a /etc/resolv.conf > /dev/null
+# Register DNS with systemd-resolved. /etc/resolv.conf is a symlink to
+# resolved's stub file on this system — appending to it directly is silently
+# ignored/overwritten, so wwan0 never gets a resolver and DNS (and anything
+# depending on it, e.g. NTP) breaks until this is set explicitly per-link.
+if [ -n "$DNS" ] && command -v resolvectl >/dev/null 2>&1; then
+  resolvectl dns "$IFACE" "$DNS"
+  resolvectl domain "$IFACE" '~.'
 fi
 
 echo "wwan0 up: ${ADDR}/${PREFIX} gw=${GW} dns=${DNS}"

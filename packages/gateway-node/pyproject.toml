@@ -34,6 +34,8 @@ dev = [
 
 [project.scripts]
 gateway-power = "gateway_node.main:main"
+gateway-camera = "gateway_node.camera_server:main"
+gateway-sensors = "gateway_node.sensors:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

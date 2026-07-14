@@ -3,15 +3,14 @@
 Connects to the local Mosquitto broker, consumes battery/solar telemetry
 published by the Pico 2 W watchdog, drives the gateway power state machine, and:
 
-  * publishes the current power mode + solar projection back to MQTT (for Home
-    Assistant dashboards/automations), and
-  * publishes a periodic heartbeat the Pico's hardware watchdog watches — if it
-    stops, the Pico power-cycles the Pi.
-  * publishes camera snapshots (on a timer and on demand via cmd topic) and
-    registers the camera entity with Home Assistant MQTT discovery.
+  * publishes power mode + solar projection to MQTT
+  * publishes a periodic heartbeat the Pico's hardware watchdog monitors
+  * tracks connected field nodes via their heartbeats and registers their
+    cameras as MQTT camera entities in Home Assistant automatically
+  * publishes the count of currently-online field nodes
 
-The Pico remains the autonomous safety backstop; this service only does the
-*graceful* degradation tier.
+Discovery is published unconditionally on every MQTT connect — not gated on
+any optional hardware.
 """
 
 from __future__ import annotations
@@ -32,6 +31,9 @@ from gateway_node.power import GatewayPowerManager
 log = structlog.get_logger()
 _running = True
 
+# Field nodes are considered offline if no heartbeat received within this window.
+_NODE_TIMEOUT_SECONDS = 300  # 5 minutes
+
 
 def _handle_signal(signum: int, frame: object) -> None:
     global _running
@@ -46,7 +48,7 @@ def _build_client() -> mqtt.Client:
     return client
 
 
-def _publish_state(client: mqtt.Client, manager: GatewayPowerManager) -> None:
+def _publish_power_state(client: mqtt.Client, manager: GatewayPowerManager) -> None:
     status = manager.solar_status
     payload = {
         "mode": manager.mode.value,
@@ -60,47 +62,106 @@ def _publish_state(client: mqtt.Client, manager: GatewayPowerManager) -> None:
     client.publish(f"securitymesh/{settings.node_id}/power", json.dumps(payload), retain=True)
 
 
-def _publish_discovery(client: mqtt.Client) -> None:
-    node = settings.node_id
-    prefix = settings.mqtt_discovery_prefix
-    snapshot_topic = f"securitymesh/{node}/snapshot"
-    cmd_topic = f"securitymesh/{node}/cmd"
-    device = {
-        "identifiers": [node],
-        "name": node,
-        "model": "SecurityMesh Gateway Node",
+def _gateway_device() -> dict[str, object]:
+    return {
+        "identifiers": [settings.node_id],
+        "name": "SFV Gateway",
+        "model": "Pi 5 Gateway Node",
         "manufacturer": "SmartFarmView",
     }
 
+
+def _publish_gateway_discovery(client: mqtt.Client) -> None:
+    """Register all gateway power/battery/node-count entities in HA."""
+    node = settings.node_id
+    prefix = settings.mqtt_discovery_prefix
+    device = _gateway_device()
+    pico_topic = settings.pico_telemetry_topic
+    power_topic = f"securitymesh/{node}/power"
+    nodes_topic = f"securitymesh/{node}/nodes/online"
+
     entities: list[tuple[str, str, dict[str, object]]] = [
-        (
-            "camera",
-            "snapshot",
-            {
-                "name": "Camera",
-                "unique_id": f"{node}_camera",
-                "topic": snapshot_topic,
-                "device": device,
-            },
-        ),
-        (
-            "button",
-            "capture",
-            {
-                "name": "Capture Snapshot",
-                "unique_id": f"{node}_capture_btn",
-                "command_topic": cmd_topic,
-                "payload_press": json.dumps({"cmd": "capture"}),
-                "icon": "mdi:camera",
-                "device": device,
-            },
-        ),
+        # ── Power brain ──────────────────────────────────────────────────────
+        ("select", "power_mode", {
+            "name": "Power Mode",
+            "unique_id": f"{node}_power_mode",
+            "state_topic": power_topic,
+            "value_template": "{{ value_json.mode }}",
+            "options": ["NORMAL", "ECO", "LOW", "CRITICAL"],
+            "icon": "mdi:solar-power",
+            "entity_category": "diagnostic",
+            "device": device,
+        }),
+
+        # ── Pico telemetry (value_template extracts fields from JSON blob) ───
+        ("sensor", "soc_pct", {
+            "name": "Battery SoC",
+            "unique_id": f"{node}_soc_pct",
+            "state_topic": pico_topic,
+            "value_template": "{{ value_json.soc_pct }}",
+            "unit_of_measurement": "%",
+            "device_class": "battery",
+            "state_class": "measurement",
+            "device": device,
+        }),
+        ("sensor", "voltage", {
+            "name": "Battery Voltage",
+            "unique_id": f"{node}_voltage",
+            "state_topic": pico_topic,
+            "value_template": "{{ value_json.voltage_v | round(2) }}",
+            "unit_of_measurement": "V",
+            "device_class": "voltage",
+            "state_class": "measurement",
+            "entity_category": "diagnostic",
+            "device": device,
+        }),
+        ("sensor", "current", {
+            "name": "Battery Current",
+            "unique_id": f"{node}_current",
+            "state_topic": pico_topic,
+            "value_template": "{{ value_json.current_ma | round(0) }}",
+            "unit_of_measurement": "mA",
+            "device_class": "current",
+            "state_class": "measurement",
+            "entity_category": "diagnostic",
+            "device": device,
+        }),
+
+        # ── Field node fleet ─────────────────────────────────────────────────
+        ("sensor", "field_nodes_online", {
+            "name": "Field Nodes Online",
+            "unique_id": f"{node}_field_nodes_online",
+            "state_topic": nodes_topic,
+            "unit_of_measurement": "nodes",
+            "icon": "mdi:access-point-network",
+            "state_class": "measurement",
+            "device": device,
+        }),
     ]
 
     for component, object_id, config in entities:
         topic = f"{prefix}/{component}/{node}/{object_id}/config"
         client.publish(topic, json.dumps(config), qos=1, retain=True)
         log.info("discovery_published", component=component, object_id=object_id)
+
+
+def _publish_field_node_camera(client: mqtt.Client, node_id: str) -> None:
+    """Register a field node's snapshot camera in HA when it first comes online."""
+    prefix = settings.mqtt_discovery_prefix
+    topic = f"{prefix}/camera/{node_id}/snapshot/config"
+    payload = {
+        "name": f"{node_id} Camera",
+        "unique_id": f"{node_id}_snapshot",
+        "topic": f"securitymesh/{node_id}/snapshot",
+        "device": {
+            "identifiers": [node_id],
+            "name": node_id,
+            "model": "SecurityMesh Field Node",
+            "manufacturer": "SmartFarmView",
+        },
+    }
+    client.publish(topic, json.dumps(payload), qos=1, retain=True)
+    log.info("field_node_camera_registered", node_id=node_id)
 
 
 def main() -> None:
@@ -110,39 +171,47 @@ def main() -> None:
     log.info("gateway_power_starting", node_id=settings.node_id)
     manager = GatewayPowerManager()
     client = _build_client()
+
     _shutdown_requested = False
-    _capture_requested = False
-
-    # Camera is hardware-optional — absent on dev machines without picamera2.
-    camera = None
-    try:
-        from gateway_node.camera import Camera
-
-        camera = Camera()
-        log.info("camera_initialised")
-    except Exception as e:
-        log.warning("camera_unavailable", error=str(e))
+    _field_nodes: dict[str, float] = {}   # node_id → last heartbeat monotonic time
+    _registered_nodes: set[str] = set()   # nodes whose cameras are registered in HA
 
     def on_connect(c: mqtt.Client, userdata: Any, flags: Any, rc: Any, props: Any = None) -> None:
         log.info("mqtt_connected", host=settings.mqtt_host, port=settings.mqtt_port)
         c.subscribe(settings.pico_telemetry_topic)
         c.subscribe(f"securitymesh/{settings.node_id}/cmd")
-        if camera is not None:
-            _publish_discovery(c)
+        c.subscribe("securitymesh/+/heartbeat")    # track field node presence
+        _publish_gateway_discovery(c)
+        # Publish initial power state so HA shows something before Pico connects
+        _publish_power_state(c, manager)
 
     def on_message(c: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
-        nonlocal _shutdown_requested, _capture_requested
+        nonlocal _shutdown_requested
 
+        # ── Capture command ───────────────────────────────────────────────────
         if msg.topic == f"securitymesh/{settings.node_id}/cmd":
             try:
                 data = json.loads(msg.payload.decode())
                 if data.get("cmd") == "capture":
-                    _capture_requested = True
+                    log.info("capture_command_received")
             except Exception as e:
                 log.warning("cmd_parse_error", error=str(e))
             return
 
-        # Pico telemetry
+        # ── Field node heartbeat ──────────────────────────────────────────────
+        if msg.topic.endswith("/heartbeat"):
+            parts = msg.topic.split("/")
+            if len(parts) >= 2:
+                node_id = parts[1]
+                if node_id == settings.node_id:
+                    return  # ignore own heartbeat
+                _field_nodes[node_id] = time.monotonic()
+                if node_id not in _registered_nodes:
+                    _registered_nodes.add(node_id)
+                    _publish_field_node_camera(c, node_id)
+            return
+
+        # ── Pico telemetry ────────────────────────────────────────────────────
         try:
             data = json.loads(msg.payload.decode())
             soc_pct = int(data["soc_pct"])
@@ -151,15 +220,9 @@ def main() -> None:
         except (ValueError, KeyError, TypeError) as e:
             log.warning("pico_telemetry_parse_error", error=str(e), payload=msg.payload[:200])
             return
-        new_mode = manager.update(soc_pct, current_ma)
-        _publish_state(c, manager)
 
-        # Gate camera power alongside mode transitions.
-        if camera is not None:
-            if manager.camera_enabled and not camera.is_active:
-                camera.wakeup()
-            elif not manager.camera_enabled and camera.is_active:
-                camera.standby()
+        new_mode = manager.update(soc_pct, current_ma)
+        _publish_power_state(c, manager)
 
         if new_mode == PowerMode.CRITICAL and not _shutdown_requested:
             _shutdown_requested = True
@@ -173,39 +236,34 @@ def main() -> None:
     client.loop_start()
 
     last_heartbeat = 0.0
-    last_snapshot = 0.0
-    snapshot_interval = settings.camera_snapshot_interval_seconds
+    last_nodes_publish = 0.0
 
     try:
         while _running:
             now = time.monotonic()
 
             if now - last_heartbeat >= settings.heartbeat_interval_seconds:
-                client.publish(settings.heartbeat_topic, json.dumps({"ts": time.time()}))
+                client.publish(
+                    settings.heartbeat_topic,
+                    json.dumps({"ts": time.time()}),
+                )
                 last_heartbeat = now
 
-            if camera is not None and manager.camera_enabled:
-                periodic_due = snapshot_interval > 0 and (now - last_snapshot >= snapshot_interval)
-                if periodic_due or _capture_requested:
-                    _capture_requested = False
-                    try:
-                        path = camera.capture_still()
-                        jpeg_bytes = path.read_bytes()
-                        client.publish(
-                            f"securitymesh/{settings.node_id}/snapshot",
-                            jpeg_bytes,
-                            qos=1,
-                            retain=True,
-                        )
-                        log.info("snapshot_published", size_kb=round(len(jpeg_bytes) / 1024, 1))
-                        last_snapshot = now
-                    except Exception as e:
-                        log.warning("snapshot_error", error=str(e))
+            # Publish field node online count every 60 s
+            if now - last_nodes_publish >= 60:
+                online = sum(
+                    1 for t in _field_nodes.values()
+                    if now - t < _NODE_TIMEOUT_SECONDS
+                )
+                client.publish(
+                    f"securitymesh/{settings.node_id}/nodes/online",
+                    str(online),
+                    retain=True,
+                )
+                last_nodes_publish = now
 
             time.sleep(1)
     finally:
-        if camera is not None:
-            camera.close()
         client.loop_stop()
         client.disconnect()
         log.info("gateway_power_stopped")
