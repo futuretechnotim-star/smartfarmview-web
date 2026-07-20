@@ -275,7 +275,8 @@ def main() -> None:
             return
         path, jpeg_bytes = result
         _publish_capture(
-            jpeg_bytes, path,
+            jpeg_bytes,
+            path,
             no_detection_summary="Motion detected",
             suppress_if_no_detection=True,
         )
@@ -314,7 +315,8 @@ def main() -> None:
                 if result is not None:
                     path, jpeg_bytes = result
                     _publish_capture(
-                        jpeg_bytes, path,
+                        jpeg_bytes,
+                        path,
                         no_detection_summary="Periodic check-in",
                         suppress_if_no_detection=False,
                     )
@@ -337,6 +339,7 @@ def main() -> None:
                 mode_changed = power_manager.mode != prev_mode
                 if mode_changed and not power_manager.motion_capture_enabled and camera is not None:
                     import threading
+
                     threading.Thread(target=camera.standby, daemon=True).start()
 
                 log.info("heartbeat_publishing")
