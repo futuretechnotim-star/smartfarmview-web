@@ -232,6 +232,14 @@ if [ -e /sys/class/net/wlan1/device/uevent ] && grep -q "8821cu" /sys/class/net/
 [keyfile]
 unmanaged-devices=interface-name:wlan1
 EOF
+    # Writing the conf.d file alone only takes effect on NetworkManager's next
+    # start/reload — if wlan1 was hot-plugged into an already-running system
+    # (as opposed to being present at boot), NM can grab it as a second WiFi
+    # *client* first (using whatever saved profile wlan0 already has, e.g.
+    # the gateway's own sfv-fieldmesh AP) before this phase ever runs, and
+    # hostapd/dnsmasq being "active" doesn't mean they actually hold the
+    # interface. Release it from NM immediately, at runtime, every run.
+    sudo nmcli device set wlan1 managed no 2>/dev/null || true
 
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-/dev/stdin}")" 2>/dev/null && pwd || echo "")"
     CONF_SRC_DIR="$DEPLOY_PATH/scripts"
@@ -256,7 +264,12 @@ EOF
 
         sudo systemctl daemon-reload
         sudo systemctl unmask hostapd
-        sudo systemctl enable --now sfv-ap-ext hostapd dnsmasq
+        sudo systemctl enable sfv-ap-ext hostapd dnsmasq
+        # Restart (not just enable --now) so an already-"active" unit that
+        # never actually held the interface (see NM race above) reclaims it.
+        sudo systemctl restart sfv-ap-ext
+        sudo systemctl restart hostapd
+        sudo systemctl restart dnsmasq
         echo "  range-extension AP configured (ssid=sfv-fieldmesh-ext1, 192.168.51.0/24)"
     else
         echo "  WARNING: wifi-ext-*.conf not deployed yet — skipping (will apply on next deploy)"
