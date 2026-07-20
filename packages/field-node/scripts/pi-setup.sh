@@ -205,6 +205,66 @@ else
     echo "  Model already present — skipping download"
 fi
 
+# ---------------------------------------------------------------------------
+echo "==> Phase 11: WiFi range-extension AP (BrosTrend AC5L, optional)"
+# ---------------------------------------------------------------------------
+# This fleet-wide script must stay a no-op on every field node that doesn't
+# have the adapter — gate entirely on the hardware actually being present
+# (rtw88_8821cu, in-kernel since 6.12) rather than any per-node config flag.
+# Distinct SSID/subnet from the gateway's own sfv-fieldmesh AP (192.168.50.0/24)
+# so overlapping radio coverage can't cause duplicate-IP/rogue-DHCP conflicts —
+# this is a separate NAT island relayed back out through this node's own wlan0.
+if [ -e /sys/class/net/wlan1/device/uevent ] && grep -q "8821cu" /sys/class/net/wlan1/device/uevent; then
+    echo "  AC5L (wlan1) detected — configuring range-extension AP"
+
+    WIFI_EXT_PACKAGES=(hostapd dnsmasq iptables-persistent)
+    WIFI_EXT_NEEDED=()
+    for pkg in "${WIFI_EXT_PACKAGES[@]}"; do
+        dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null \
+            | grep -q "install ok installed" || WIFI_EXT_NEEDED+=("$pkg")
+    done
+    if [ ${#WIFI_EXT_NEEDED[@]} -gt 0 ]; then
+        sudo apt-get update -qq
+        sudo apt-get install -y "${WIFI_EXT_NEEDED[@]}"
+    fi
+
+    sudo tee /etc/NetworkManager/conf.d/unmanaged-wlan1.conf > /dev/null << 'EOF'
+[keyfile]
+unmanaged-devices=interface-name:wlan1
+EOF
+
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-/dev/stdin}")" 2>/dev/null && pwd || echo "")"
+    CONF_SRC_DIR="$DEPLOY_PATH/scripts"
+    [ -f "$CONF_SRC_DIR/wifi-ext-hostapd.conf" ] || CONF_SRC_DIR="$SCRIPT_DIR"
+
+    if [ -f "$CONF_SRC_DIR/wifi-ext-hostapd.conf" ]; then
+        sudo cp "$CONF_SRC_DIR/wifi-ext-hostapd.conf" /etc/hostapd/hostapd.conf
+        sudo cp "$CONF_SRC_DIR/wifi-ext-dnsmasq.conf" /etc/dnsmasq.d/sfv-fieldmesh-ext1.conf
+        sudo cp "$CONF_SRC_DIR/sfv-ap-ext.service" /etc/systemd/system/sfv-ap-ext.service
+
+        echo 'net.ipv4.ip_forward=1' | sudo tee /etc/sysctl.d/90-sfv-forward.conf > /dev/null
+        sudo sysctl -p /etc/sysctl.d/90-sfv-forward.conf > /dev/null
+
+        # Idempotent: only add the NAT/forward rules if not already present.
+        sudo iptables -t nat -C POSTROUTING -s 192.168.51.0/24 -o wlan0 -j MASQUERADE 2>/dev/null \
+            || sudo iptables -t nat -A POSTROUTING -s 192.168.51.0/24 -o wlan0 -j MASQUERADE
+        sudo iptables -C FORWARD -i wlan1 -o wlan0 -j ACCEPT 2>/dev/null \
+            || sudo iptables -A FORWARD -i wlan1 -o wlan0 -j ACCEPT
+        sudo iptables -C FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null \
+            || sudo iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
+        sudo netfilter-persistent save
+
+        sudo systemctl daemon-reload
+        sudo systemctl unmask hostapd
+        sudo systemctl enable --now sfv-ap-ext hostapd dnsmasq
+        echo "  range-extension AP configured (ssid=sfv-fieldmesh-ext1, 192.168.51.0/24)"
+    else
+        echo "  WARNING: wifi-ext-*.conf not deployed yet — skipping (will apply on next deploy)"
+    fi
+else
+    echo "  no AC5L detected on wlan1 — skipping (expected on nodes without the adapter)"
+fi
+
 echo ""
 echo "==> Setup complete!"
 echo "  Node: $(hostname)"
