@@ -39,6 +39,7 @@ import fan_logic
 import gate_logic
 import network  # type: ignore[import-not-found]
 import ota
+import ota_prep
 from bme280 import BME280
 from ina3221 import INA3221
 from machine import ADC, I2C, Pin  # type: ignore[import-not-found]
@@ -46,8 +47,12 @@ from mqtt_link import MQTTLink
 from soc import lifepo4_soc
 
 
-def _connect_wifi() -> None:
-    wlan = network.WLAN(network.STA_IF)
+def _connect_wifi(wlan: "network.WLAN") -> None:
+    """Attempt one connection. Callers must retry periodically — this alone
+    only tries for ~10s, and if the AP isn't up yet at that exact moment
+    (e.g. the gateway restarting around the same time as the Pico), a
+    one-shot attempt at boot leaves the Pico permanently disconnected for the
+    rest of that power cycle."""
     wlan.active(True)
     if not wlan.isconnected():
         wlan.connect(secrets.WIFI_SSID, secrets.WIFI_PASSWORD)
@@ -79,6 +84,60 @@ def _read_temperature(bme: "BME280 | None") -> "float | None":
         return None
 
 
+def _prepare_and_apply_ota(link: MQTTLink, halt_confirmed_pin: Pin, base_url: str) -> None:
+    """Stage the update (needs the gateway's own network/AP, so this runs
+    first, before anything is asked to halt), then ask the gateway to
+    gracefully halt and wait for confirmation before activating.
+
+    Activating ends in machine.reset(), which briefly leaves the relay pins
+    undriven — until the relay's own wiring makes that fail-safe (see
+    docs/gateway-node.md), that reboot must not land on a live Pi. Activation
+    itself needs no network, which is exactly why staging happens first: by
+    the time the gateway has actually halted, its AP is down too, so the file
+    server a single-step apply would still be trying to reach is already
+    unreachable.
+    """
+    link.publish_telemetry({"ota_status": "staging"})
+    stage_error = ota.stage_update(base_url)
+    if stage_error is not None:
+        link.publish_telemetry({"ota_status": "stage_failed", "ota_error": stage_error})
+        return
+
+    if not link.is_connected():
+        link.connect()
+    link.publish(config.GATEWAY_CMD_TOPIC, {"cmd": "prepare_shutdown"})
+
+    start = time.time()
+    while True:
+        # Retry the connection here too (unlike the outer loop's slow 300s
+        # backoff) — a dropped link during this window would otherwise make
+        # every publish() below silently no-op, running the whole wait to
+        # completion invisibly. halt_confirmed itself is a direct GPIO read
+        # and doesn't depend on this — the gateway's AP going down mid-wait
+        # (expected, as part of its own halt) just means these status
+        # publishes stop landing anywhere, not that the wait itself breaks.
+        if not link.is_connected():
+            link.connect()
+        link.poll()
+        halt_confirmed = bool(halt_confirmed_pin.value())
+        elapsed = time.time() - start
+        outcome = ota_prep.decide_ota_wait(halt_confirmed, elapsed, config.OTA_SHUTDOWN_TIMEOUT_S)
+
+        if outcome == ota_prep.PROCEED:
+            break
+        if outcome == ota_prep.ABORT:
+            link.publish_telemetry({"ota_status": "aborted_gateway_did_not_halt"})
+            return
+
+        link.publish_telemetry({"ota_status": "waiting_for_gateway_halt", "elapsed_s": round(elapsed, 1)})
+        time.sleep(config.LOOP_INTERVAL_S)
+
+    link.publish_telemetry({"ota_status": "activating"})
+    error = ota.activate_staged()  # resets the board on success
+    if error is not None:
+        link.publish_telemetry({"ota_status": "activate_failed", "ota_error": error})
+
+
 def main() -> None:
     power_en = Pin(config.PIN_PI_POWER_EN, Pin.OUT, value=1)
     psu_relay = Pin(config.PIN_PSU_RELAY, Pin.OUT, value=1)  # mirrors power_en
@@ -98,7 +157,9 @@ def main() -> None:
     except Exception:
         bme = None  # sensor not connected yet; fan stays in its last state
 
-    _connect_wifi()
+    wlan = network.WLAN(network.STA_IF)
+    _connect_wifi(wlan)
+    last_wifi_reconnect_attempt = time.time()
     link = MQTTLink(
         "gateway-pico",
         secrets.MQTT_HOST,
@@ -115,6 +176,10 @@ def main() -> None:
 
     while True:
         now = time.time()
+        if not wlan.isconnected() and now - last_wifi_reconnect_attempt >= config.WIFI_RECONNECT_INTERVAL_S:
+            _connect_wifi(wlan)
+            last_wifi_reconnect_attempt = now
+
         if not link.is_connected() and now - last_mqtt_reconnect_attempt >= config.MQTT_RECONNECT_INTERVAL_S:
             link.connect()
             last_mqtt_reconnect_attempt = now
@@ -124,10 +189,7 @@ def main() -> None:
         ota_base_url = link.pop_pending_ota()
         if ota_base_url is not None:
             if state == gate_logic.PI_ON:
-                link.publish_telemetry({"gate_state": state, "ota_status": "applying"})
-                error = ota.apply_update(ota_base_url)  # resets the board on success
-                if error is not None:
-                    link.publish_telemetry({"gate_state": state, "ota_status": "failed", "ota_error": error})
+                _prepare_and_apply_ota(link, halt_confirmed_pin, ota_base_url)
             else:
                 link.publish_telemetry({"gate_state": state, "ota_status": "skipped_not_pi_on"})
 

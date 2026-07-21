@@ -180,12 +180,18 @@ def main() -> None:
     def on_message(c: mqtt.Client, userdata: Any, msg: mqtt.MQTTMessage) -> None:
         nonlocal _shutdown_requested
 
-        # ── Capture command ───────────────────────────────────────────────────
+        # ── Capture / maintenance commands ───────────────────────────────────
         if msg.topic == f"securitymesh/{settings.node_id}/cmd":
             try:
                 data = json.loads(msg.payload.decode())
                 if data.get("cmd") == "capture":
                     log.info("capture_command_received")
+                elif data.get("cmd") == "prepare_shutdown":
+                    # Deliberate maintenance halt (e.g. before a Pico OTA reboot
+                    # that would otherwise glitch gateway power) — a real halt
+                    # via request_shutdown(), independent of battery/power mode.
+                    log.info("prepare_shutdown_command_received")
+                    request_shutdown()
             except Exception as e:
                 log.warning("cmd_parse_error", error=str(e))
             return
@@ -206,6 +212,17 @@ def main() -> None:
         # ── Pico telemetry ────────────────────────────────────────────────────
         try:
             data = json.loads(msg.payload.decode())
+        except (ValueError, TypeError) as e:
+            log.warning("pico_telemetry_parse_error", error=str(e), payload=msg.payload[:200])
+            return
+
+        # OTA status updates share this topic but aren't full telemetry —
+        # they carry no soc_pct, so log them distinctly instead of erroring.
+        if "ota_status" in data:
+            log.info("pico_ota_status", **data)
+            return
+
+        try:
             soc_pct = int(data["soc_pct"])
             current_ma = data.get("current_ma")
             current_ma = float(current_ma) if current_ma is not None else None

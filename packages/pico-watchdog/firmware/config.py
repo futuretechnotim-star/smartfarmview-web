@@ -61,8 +61,16 @@ ADC_REF_VOLTAGE = 3.3
 TELEMETRY_TOPIC = b"securitymesh/gateway/pico/telemetry"
 HEARTBEAT_TOPIC = b"securitymesh/gateway/pi/heartbeat"
 COMMAND_TOPIC = b"securitymesh/gateway/pico/cmd"
+GATEWAY_CMD_TOPIC = b"securitymesh/sfv-gateway/cmd"  # gateway_node's own command topic
 
 # --- Loop timing ------------------------------------------------------------
 LOOP_INTERVAL_S = 5  # how often to sample voltage and run the state machine
 TELEMETRY_INTERVAL_S = 30  # how often to publish telemetry
+WIFI_RECONNECT_INTERVAL_S = 60  # how often to retry WiFi after a failed/dropped connection
 MQTT_RECONNECT_INTERVAL_S = 300  # how often to retry MQTT after a dropped connection
+
+# --- OTA -----------------------------------------------------------------------
+# An OTA update ends in machine.reset(), which briefly leaves the relay control
+# pins undriven — until the relay's own wiring makes that fail-safe, an update
+# must wait for the gateway to actually halt first (see ota_prep.py).
+OTA_SHUTDOWN_TIMEOUT_S = 120  # max wait for halt_confirmed before aborting the update
