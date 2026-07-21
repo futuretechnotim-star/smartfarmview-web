@@ -12,7 +12,10 @@ and [`docs/pico-watchdog.md`](../../docs/pico-watchdog.md).
   `PI_ON → SHUTTING_DOWN → PI_OFF → PI_ON`.
   - **Low battery:** assert `SHUTDOWN_REQ`, wait the grace period, then cut the
     Pi's 5V supply (`PIN_PI_POWER_EN`) and the gateway PSU relay (`PIN_PSU_RELAY`,
-    mirrored in lockstep as a second, more robust cutoff).
+    a second, more robust cutoff). The PSU relay is wired through its **NC**
+    contact, not NO, so it fails safe: a Pico reboot (crash, watchdog, OTA)
+    leaves the pin briefly undriven, and de-energized means NC stays closed —
+    power keeps flowing by default, only a deliberate cut opens it.
   - **Wake-on-recharge:** keep the Pi off until voltage recovers (hysteresis),
     then restore power. *This is the whole reason an external device is needed —
     the Pi 5 cannot wake itself after a deep-battery shutdown.*
@@ -52,7 +55,7 @@ tests/           CPython tests for the pure modules
 | Pico pin | To |
 |---|---|
 | `PIN_PI_POWER_EN` (GP15) | 5V buck ENABLE / high-side load switch |
-| `PIN_PSU_RELAY` (GP16) | gateway PSU relay — mirrors `PIN_PI_POWER_EN` in lockstep |
+| `PIN_PSU_RELAY` (GP16) | gateway PSU relay IN — wired through **NC**, not NO (COM ← charge controller load(+), NC → PSU(+)) |
 | `PIN_SHUTDOWN_REQ` (GP14) | Pi GPIO "please halt" input |
 | `PIN_I2C_SDA/SCL` (GP4/5) | shared I2C0: INA3221 (`0x40`) + BME280 (`0x77`) |
 | `PIN_FAN_RELAY` (GP17) | enclosure fan relay — thermostat-controlled |

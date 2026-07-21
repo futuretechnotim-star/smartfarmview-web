@@ -22,8 +22,12 @@ Wiring (fan relay):
   Relay IN → GP17 (PIN_FAN_RELAY)
 
 Wiring (gateway PSU relay):
-  Relay IN → GP16 (PIN_PSU_RELAY) — mirrors PIN_PI_POWER_EN in lockstep, as a
-  second, more robust cutoff on the PSU itself.
+  Relay IN → GP16 (PIN_PSU_RELAY) — a second, more robust cutoff on the PSU
+  itself. Wired through the relay's NC contact (not NO): COM ← solar charge
+  controller load(+), NC → PSU(+). De-energized (the pin's state during the
+  Pico's own boot/reset gap) closes NC and lets power flow — see
+  _PSU_RELAY_ON/_PSU_RELAY_OFF below. A Pico reboot no longer glitches this
+  relay's output; only a deliberate cut does.
 
 Wiring (halt confirmation from the Pi's gpio-poweroff overlay):
   Pi GPIO27 → GP18 (PIN_HALT_CONFIRMED). Active HIGH, only driven once the
@@ -138,9 +142,21 @@ def _prepare_and_apply_ota(link: MQTTLink, halt_confirmed_pin: Pin, base_url: st
         link.publish_telemetry({"ota_status": "activate_failed", "ota_error": error})
 
 
+# PIN_PSU_RELAY specifically is wired through the relay's NC (Normally
+# Closed) contact, not NO — confirmed on hardware: with the signal line
+# disconnected (the same undefined state the pin sits in during the Pico's
+# own boot/reset gap), the relay de-energizes and NC carries battery voltage
+# through to the load while NO reads 0V. That makes de-energized == powered
+# the fail-safe default: a Pico reboot no longer glitches the PSU relay's
+# output, only a deliberate, actively-driven cut does. PIN_PI_POWER_EN is a
+# direct buck-enable line (not a relay) and is unaffected — plain active-high.
+_PSU_RELAY_ON = 0  # de-energized -> NC closed -> power flows
+_PSU_RELAY_OFF = 1  # energized -> NC open -> power cut
+
+
 def main() -> None:
     power_en = Pin(config.PIN_PI_POWER_EN, Pin.OUT, value=1)
-    psu_relay = Pin(config.PIN_PSU_RELAY, Pin.OUT, value=1)  # mirrors power_en
+    psu_relay = Pin(config.PIN_PSU_RELAY, Pin.OUT, value=_PSU_RELAY_ON)  # NC-wired — see above
     shutdown_req = Pin(config.PIN_SHUTDOWN_REQ, Pin.OUT, value=0)
     fan_relay = Pin(config.PIN_FAN_RELAY, Pin.OUT, value=0)
     halt_confirmed_pin = Pin(config.PIN_HALT_CONFIRMED, Pin.IN, Pin.PULL_DOWN)
@@ -221,18 +237,18 @@ def main() -> None:
             shutdown_req.value(1)
         elif action == gate_logic.ACTION_CUT_POWER:
             power_en.value(0)
-            psu_relay.value(0)
+            psu_relay.value(_PSU_RELAY_OFF)
             shutdown_req.value(0)
         elif action == gate_logic.ACTION_RESTORE_POWER:
             shutdown_req.value(0)
             power_en.value(1)
-            psu_relay.value(1)
+            psu_relay.value(_PSU_RELAY_ON)
         elif action == gate_logic.ACTION_REBOOT:
             power_en.value(0)
-            psu_relay.value(0)
+            psu_relay.value(_PSU_RELAY_OFF)
             time.sleep(5)
             power_en.value(1)
-            psu_relay.value(1)
+            psu_relay.value(_PSU_RELAY_ON)
             link.reset_heartbeat()
 
         if new_state != state:

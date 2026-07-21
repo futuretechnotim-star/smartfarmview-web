@@ -37,7 +37,7 @@ PI_ON ──(heartbeat stale)──► power-cycle, stay PI_ON
 | Pico pin | To | Purpose |
 |---|---|---|
 | GP15 `PIN_PI_POWER_EN` | 5V buck ENABLE / high-side load switch | gate the Pi's power |
-| GP16 `PIN_PSU_RELAY` | gateway PSU relay IN | second, more robust cutoff — mirrors `PIN_PI_POWER_EN` in lockstep |
+| GP16 `PIN_PSU_RELAY` | gateway PSU relay IN | second, more robust cutoff, wired through the relay's **NC** contact (COM ← solar charge controller load(+), NC → PSU(+)) so a Pico reboot fails safe to *powered*, not cut |
 | GP14 `PIN_SHUTDOWN_REQ` | Pi GPIO input | "please halt now" |
 | GP4/GP5 `PIN_I2C_SDA/SCL` | I2C0 bus: INA3221 (`0x40`) + BME280 (`0x77`) | battery voltage + enclosure temp |
 | GP26/ADC0 `PIN_BATTERY_ADC` | divided battery voltage | backup if I2C fails |
