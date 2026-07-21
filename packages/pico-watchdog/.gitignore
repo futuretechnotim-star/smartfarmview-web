@@ -1,4 +1,5 @@
 firmware/secrets.py
+firmware/manifest.json
 .venv/
 __pycache__/
 *.pyc

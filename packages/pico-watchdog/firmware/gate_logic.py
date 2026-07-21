@@ -41,12 +41,23 @@ def decide(
     recovery_voltage: float,
     grace_seconds: float,
     heartbeat_timeout_s: float,
+    halt_confirmed: bool = False,
 ) -> "tuple[str, str]":
     """Return ``(new_state, action)`` for the current inputs.
 
     ``heartbeat_age_s`` is seconds since the last Pi heartbeat; pass a small
     value (e.g. just after a reboot) to indicate a healthy, recently-heard Pi.
+
+    ``halt_confirmed`` reflects the gpio-poweroff signal from the Pi (driven
+    only once its OS halt has actually completed, not merely requested) — it
+    lets the gate cut power immediately instead of waiting out the full
+    ``grace_seconds`` guess, without weakening the guess-based fallback: if the
+    wire is absent/disconnected the caller must pass False (safe default), so
+    a stuck-on Pi still gets cut after ``grace_seconds`` as before.
     """
+    if halt_confirmed and state in (PI_ON, SHUTTING_DOWN):
+        return PI_OFF, ACTION_CUT_POWER
+
     if state == PI_ON:
         # Low battery wins over the watchdog — always prefer a graceful halt.
         if voltage_v <= shutdown_voltage:
@@ -63,6 +74,17 @@ def decide(
         return SHUTTING_DOWN, ACTION_NONE
 
     if state == PI_OFF:
+        # While halt_confirmed is still asserted, the Pi's GPIO is still being
+        # actively driven — which on real hardware means it hasn't actually
+        # lost power yet (a truly de-energized Pi lets this float back low
+        # through the Pico's pull-down). Restoring power on voltage alone here
+        # would fight the very cutoff we just honored: the whole reason
+        # shutdown_voltage sits below the software CRITICAL threshold is so a
+        # graceful halt can happen *before* voltage actually gets low, so
+        # voltage reading "recovered" the instant we cut is expected, not a
+        # signal to reboot immediately.
+        if halt_confirmed:
+            return PI_OFF, ACTION_NONE
         if voltage_v >= recovery_voltage:
             return PI_ON, ACTION_RESTORE_POWER
         return PI_OFF, ACTION_NONE

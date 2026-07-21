@@ -18,13 +18,31 @@ HEARTBEAT_TIMEOUT_S = 300  # no Pi heartbeat for this long (while ON) → reboot
 # --- GPIO pin map (BCM/GP numbering on the Pico) ----------------------------
 PIN_PI_POWER_EN = 15   # drives the 5V buck ENABLE / high-side load switch
 PIN_SHUTDOWN_REQ = 14  # asserted high to ask the Pi to begin a clean shutdown
+PIN_HALT_CONFIRMED = 18  # from the Pi's gpio-poweroff overlay: halt actually
+                         # completed (not merely requested) — active HIGH, with
+                         # an internal pull-down so a disconnected/loose wire
+                         # fails safe to "not halted" rather than forcing a cut.
 PIN_BATTERY_ADC = 26   # ADC0 — divided battery voltage (fallback if I2C fails)
 
-# I2C0 — INA3221 voltage sensor (GODIYMODULES Mod-INA3221-002)
+# I2C0 — shared bus: INA3221 voltage sensor + BME280 enclosure temperature
 PIN_I2C_SDA = 4        # GP4 = I2C0 SDA
 PIN_I2C_SCL = 5        # GP5 = I2C0 SCL
 I2C_FREQ = 400_000
 INA3221_ADDR = 0x40    # ADDR pin → GND (default on most breakout boards)
+BME280_ADDR = 0x77     # SDO tied high (SparkFun Environmental Combo Breakout)
+
+# --- Fan relay ----------------------------------------------------------------
+PIN_FAN_RELAY = 17     # drives the enclosure fan relay
+
+# --- Gateway PSU relay ---------------------------------------------------------
+# A second, more robust cutoff on the PSU itself (vs. PIN_PI_POWER_EN, which only
+# gates the 5V buck enable). Mirrors the same gate_logic actions in lockstep —
+# see main.py's action-handling block.
+PIN_PSU_RELAY = 16
+
+# --- Fan thermostat (hysteresis, degrees C) ---------------------------------
+FAN_ON_TEMP_C = 35.0   # enclosure temp at/above which the fan turns on
+FAN_OFF_TEMP_C = 30.0  # enclosure temp at/below which the fan turns back off
 
 # Channel assignments (both IN+ and IN- shorted together for voltage-only on CH1/CH3;
 # CH2 is in-line through the 0.1 Ω onboard shunt for 5V load current up to 1.638 A)
@@ -47,3 +65,4 @@ COMMAND_TOPIC = b"securitymesh/gateway/pico/cmd"
 # --- Loop timing ------------------------------------------------------------
 LOOP_INTERVAL_S = 5  # how often to sample voltage and run the state machine
 TELEMETRY_INTERVAL_S = 30  # how often to publish telemetry
+MQTT_RECONNECT_INTERVAL_S = 300  # how often to retry MQTT after a dropped connection

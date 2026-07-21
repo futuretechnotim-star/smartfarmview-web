@@ -1,0 +1,14 @@
+[Unit]
+Description=SFV Pico Watchdog OTA File Server
+After=network.target
+
+[Service]
+Type=simple
+User=techno
+WorkingDirectory=/opt/pico-fw
+ExecStart=/usr/bin/python3 -m http.server 8090 --directory /opt/pico-fw
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -5,8 +5,9 @@ published by the Pico 2 W watchdog, drives the gateway power state machine, and:
 
   * publishes power mode + solar projection to MQTT
   * publishes a periodic heartbeat the Pico's hardware watchdog monitors
-  * tracks connected field nodes via their heartbeats and registers their
-    cameras as MQTT camera entities in Home Assistant automatically
+  * tracks connected field nodes via their telemetry publishes (field nodes have
+    no separate heartbeat topic) and registers their cameras as MQTT camera
+    entities in Home Assistant automatically
   * publishes the count of currently-online field nodes
 
 Discovery is published unconditionally on every MQTT connect — not gated on
@@ -115,18 +116,6 @@ def _publish_gateway_discovery(client: mqtt.Client) -> None:
             "entity_category": "diagnostic",
             "device": device,
         }),
-        ("sensor", "current", {
-            "name": "Battery Current",
-            "unique_id": f"{node}_current",
-            "state_topic": pico_topic,
-            "value_template": "{{ value_json.current_ma | round(0) }}",
-            "unit_of_measurement": "mA",
-            "device_class": "current",
-            "state_class": "measurement",
-            "entity_category": "diagnostic",
-            "device": device,
-        }),
-
         # ── Field node fleet ─────────────────────────────────────────────────
         ("sensor", "field_nodes_online", {
             "name": "Field Nodes Online",
@@ -180,7 +169,10 @@ def main() -> None:
         log.info("mqtt_connected", host=settings.mqtt_host, port=settings.mqtt_port)
         c.subscribe(settings.pico_telemetry_topic)
         c.subscribe(f"securitymesh/{settings.node_id}/cmd")
-        c.subscribe("securitymesh/+/heartbeat")    # track field node presence
+        # Field nodes have no dedicated heartbeat topic — telemetry.publish_heartbeat()
+        # (field_node/telemetry.py) actually publishes onto the regular "telemetry"
+        # topic, so that doubles as the presence signal here.
+        c.subscribe("securitymesh/+/telemetry")    # track field node presence
         _publish_gateway_discovery(c)
         # Publish initial power state so HA shows something before Pico connects
         _publish_power_state(c, manager)
@@ -198,13 +190,13 @@ def main() -> None:
                 log.warning("cmd_parse_error", error=str(e))
             return
 
-        # ── Field node heartbeat ──────────────────────────────────────────────
-        if msg.topic.endswith("/heartbeat"):
+        # ── Field node telemetry (doubles as presence/heartbeat) ─────────────────
+        if msg.topic.endswith("/telemetry") and msg.topic != settings.pico_telemetry_topic:
             parts = msg.topic.split("/")
-            if len(parts) >= 2:
+            if len(parts) == 3:
                 node_id = parts[1]
                 if node_id == settings.node_id:
-                    return  # ignore own heartbeat
+                    return  # ignore own telemetry
                 _field_nodes[node_id] = time.monotonic()
                 if node_id not in _registered_nodes:
                     _registered_nodes.add(node_id)

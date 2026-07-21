@@ -19,6 +19,7 @@ class MQTTLink:
         self._client = MQTTClient(client_id, host, user=user, password=password, keepalive=60)
         self._last_heartbeat_ms = 0
         self._connected = False
+        self._pending_ota_base_url: str | None = None
 
     def connect(self) -> bool:
         try:
@@ -35,6 +36,23 @@ class MQTTLink:
     def _on_message(self, topic: bytes, msg: bytes) -> None:
         if topic == config.HEARTBEAT_TOPIC:
             self._last_heartbeat_ms = time.ticks_ms()  # type: ignore[attr-defined]
+        elif topic == config.COMMAND_TOPIC:
+            # Just record it here — applying an OTA update does blocking HTTP
+            # downloads, which has no business running inside the MQTT
+            # client's own message-pump callback. main.py applies it from the
+            # ordinary loop instead, via pop_pending_ota().
+            try:
+                data = json.loads(msg)
+                if data.get("cmd") == "ota" and data.get("base_url"):
+                    self._pending_ota_base_url = data["base_url"]
+            except Exception:  # noqa: BLE001 — malformed command, ignore
+                pass
+
+    def pop_pending_ota(self) -> "str | None":
+        """Return and clear a pending OTA base_url, if a command arrived."""
+        base_url = self._pending_ota_base_url
+        self._pending_ota_base_url = None
+        return base_url
 
     def heartbeat_age_s(self) -> float:
         delta = time.ticks_diff(time.ticks_ms(), self._last_heartbeat_ms)  # type: ignore[attr-defined]
@@ -44,6 +62,9 @@ class MQTTLink:
         """Treat now as a fresh heartbeat — used after a watchdog power-cycle so
         the just-rebooted Pi isn't immediately flagged as hung again."""
         self._last_heartbeat_ms = time.ticks_ms()  # type: ignore[attr-defined]
+
+    def is_connected(self) -> bool:
+        return self._connected
 
     def poll(self) -> None:
         if self._connected:
