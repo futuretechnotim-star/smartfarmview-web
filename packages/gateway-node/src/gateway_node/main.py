@@ -116,6 +116,28 @@ def _publish_gateway_discovery(client: mqtt.Client) -> None:
             "entity_category": "diagnostic",
             "device": device,
         }),
+        ("sensor", "load_voltage", {
+            "name": "5V Load Voltage",
+            "unique_id": f"{node}_load_voltage",
+            "state_topic": pico_topic,
+            "value_template": "{{ value_json.load_voltage_v | round(2) }}",
+            "unit_of_measurement": "V",
+            "device_class": "voltage",
+            "state_class": "measurement",
+            "entity_category": "diagnostic",
+            "device": device,
+        }),
+        ("sensor", "solar_voltage", {
+            "name": "Solar Voltage",
+            "unique_id": f"{node}_solar_voltage",
+            "state_topic": pico_topic,
+            "value_template": "{{ value_json.solar_voltage_v | round(2) }}",
+            "unit_of_measurement": "V",
+            "device_class": "voltage",
+            "state_class": "measurement",
+            "entity_category": "diagnostic",
+            "device": device,
+        }),
         # ── Field node fleet ─────────────────────────────────────────────────
         ("sensor", "field_nodes_online", {
             "name": "Field Nodes Online",
