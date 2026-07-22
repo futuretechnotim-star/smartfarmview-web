@@ -79,6 +79,18 @@ def _read_voltage(ina: "INA3221 | None", adc: ADC) -> tuple[float, str]:
     return raw * config.ADC_REF_VOLTAGE * config.ADC_DIVIDER_RATIO, "adc"
 
 
+def _read_ina_channel(ina: "INA3221 | None", channel: int) -> "float | None":
+    """Best-effort read of a non-safety-critical INA3221 channel (load/solar)
+    — unlike _read_voltage, no ADC fallback and no impact on gate_logic;
+    just diagnostic visibility in telemetry."""
+    if ina is None:
+        return None
+    try:
+        return ina.bus_voltage(channel)
+    except Exception:
+        return None
+
+
 def _read_temperature(bme: "BME280 | None") -> "float | None":
     if bme is None:
         return None
@@ -210,6 +222,8 @@ def main() -> None:
                 link.publish_telemetry({"gate_state": state, "ota_status": "skipped_not_pi_on"})
 
         voltage, v_source = _read_voltage(ina, adc)
+        load_voltage_v = _read_ina_channel(ina, config.INA3221_CH_LOAD_5V)
+        solar_voltage_v = _read_ina_channel(ina, config.INA3221_CH_SOLAR)
         enclosure_temp_c = _read_temperature(bme)
 
         if enclosure_temp_c is not None:
@@ -261,6 +275,12 @@ def main() -> None:
                     "soc_pct": lifepo4_soc(voltage),
                     "voltage_v": round(voltage, 2),
                     "v_source": v_source,
+                    "load_voltage_v": (
+                        round(load_voltage_v, 2) if load_voltage_v is not None else None
+                    ),
+                    "solar_voltage_v": (
+                        round(solar_voltage_v, 2) if solar_voltage_v is not None else None
+                    ),
                     "gate_state": state,
                     "last_action": action,
                     "halt_confirmed": bool(halt_confirmed_pin.value()),
