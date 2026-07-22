@@ -14,6 +14,7 @@ dependencies = [
     "pydantic-settings>=2.0",
     "structlog>=23.0",
     "python-dotenv>=1.0",
+    "smbus2>=0.4",  # ZED-F9P GPS-RTK2 I2C driver (gps_driver.py)
     # Shared solar power-budget decision logic (pure, no deps). Installed from
     # the monorepo: CI/deploy run `pip install -e ../power-policy` first, which
     # satisfies this requirement (it is not published to PyPI).
@@ -57,5 +58,5 @@ strict = true
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
-module = ["paho.*", "picamera2.*"]
+module = ["paho.*", "picamera2.*", "smbus2.*"]
 ignore_missing_imports = true

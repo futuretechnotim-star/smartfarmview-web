@@ -59,6 +59,17 @@ class Settings(BaseSettings):
     # HTTP port for the MJPEG stream service (gateway-camera.service).
     camera_stream_port: int = 8765
 
+    # RTK GPS base station (SparkFun GPS-RTK2 ZED-F9P, I2C @ 0x42, shares I2C
+    # bus 1 with the environmental sensors). Published alongside them on the
+    # same gateway-sensors.service poll cycle — see sensors_poll_interval_seconds.
+    gps_enabled: bool = True
+    gps_i2c_addr: int = 0x42
+    # Shared poll cadence for all of gateway-sensors.service's readings (BME280/
+    # CCS811/GPS). A dedicated interval per-sensor isn't needed yet — everything
+    # publishes together — but this is broken out now so GPS can get its own
+    # cadence later without disturbing the others.
+    sensors_poll_interval_seconds: int = 60
+
     # Home Assistant REST API — used for graceful shutdown on CRITICAL power mode.
     # Use the local address when gateway and HA share the same machine; use the
     # Tailscale IP (http://100.95.222.13:8123) when they are on separate hosts.

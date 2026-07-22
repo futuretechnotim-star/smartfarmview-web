@@ -1,15 +1,18 @@
-"""Gateway environmental sensor service (gateway-sensors.service).
+"""Gateway GPS-RTK sensor service (gateway-sensors.service).
 
-Polls the SparkFun Environmental Combo Breakout (CCS811 @ 0x5B + BME280 @ 0x77)
-on I2C bus 1 every 60 seconds and publishes readings to MQTT.
+Polls the SparkFun GPS-RTK2 (ZED-F9P @ 0x42, I2C bus 1) every
+settings.sensors_poll_interval_seconds (60s default) and publishes fix data
+to MQTT. This gateway is the RTK base station reference for the survey
+stick + rover fleet on the mesh.
 
-Publishes HA MQTT discovery on startup so all five sensors appear under the
-SFV Gateway device automatically:
-  - Temperature (°C)
-  - Relative Humidity (%)
-  - Pressure (hPa)
-  - eCO2 (ppm)   — shows 0 during CCS811 warm-up (~20 min from cold start)
-  - TVOC (ppb)   — same warm-up caveat
+The environmental combo board (BME280 + CCS811) previously read here has
+moved to the Pico watchdog (which uses the BME280 for fan control) — the
+gateway doesn't need to duplicate it.
+
+Publishes HA MQTT discovery on startup:
+  - GPS RTK status (none/float/fixed), fix type, satellite count
+  - Latitude/longitude, altitude
+  - Horizontal/vertical accuracy, PDOP
 
 Topic: securitymesh/{node_id}/sensors  (retained JSON)
 """
@@ -20,20 +23,46 @@ import json
 import signal
 import time
 
-import board
-import busio
-import adafruit_bme280.basic as adafruit_bme280
-import adafruit_ccs811
 import paho.mqtt.client as mqtt
+import smbus2
 import structlog
 
 from gateway_node.config import settings
+from gateway_node.gps_driver import ZedF9pDriver
+from gateway_node.gps_protocol import RTK_FIXED, RTK_FLOAT, RTK_NONE, GpsFix
 
 log = structlog.get_logger()
 
 _running = True
-_POLL_INTERVAL = 60  # seconds
-_CCS811_ADDR = 0x5B  # SparkFun board has ADDR pin high
+_GPS_I2C_BUS_NUMBER = 1  # /dev/i2c-1
+
+_RTK_STATUS_LABELS = {RTK_NONE: "none", RTK_FLOAT: "float", RTK_FIXED: "fixed"}
+
+
+def _gps_payload_fields(fix: GpsFix | None) -> dict[str, object]:
+    if fix is None:
+        return {
+            "gps_fix_type": None,
+            "gps_num_satellites": None,
+            "gps_lat": None,
+            "gps_lon": None,
+            "gps_altitude_m": None,
+            "gps_h_acc_m": None,
+            "gps_v_acc_m": None,
+            "gps_rtk_status": None,
+            "gps_pdop": None,
+        }
+    return {
+        "gps_fix_type": fix.fix_type,
+        "gps_num_satellites": fix.num_satellites,
+        "gps_lat": round(fix.latitude, 8),
+        "gps_lon": round(fix.longitude, 8),
+        "gps_altitude_m": round(fix.altitude_m, 3),
+        "gps_h_acc_m": round(fix.horizontal_accuracy_m, 3),
+        "gps_v_acc_m": round(fix.vertical_accuracy_m, 3),
+        "gps_rtk_status": _RTK_STATUS_LABELS.get(fix.rtk_status, "none"),
+        "gps_pdop": round(fix.pdop, 2),
+    }
 
 
 def _handle_signal(signum: int, frame: object) -> None:
@@ -57,55 +86,92 @@ def _publish_discovery(client: mqtt.Client) -> None:
     device = _gateway_device()
 
     entities: list[tuple[str, dict[str, object]]] = [
-        ("temperature", {
-            "name": "Temperature",
-            "unique_id": f"{node}_temperature",
+        ("gps_rtk_status", {
+            "name": "GPS RTK Status",
+            "unique_id": f"{node}_gps_rtk_status",
             "state_topic": state_topic,
-            "value_template": "{{ value_json.temperature | round(1) }}",
-            "unit_of_measurement": "°C",
-            "device_class": "temperature",
-            "state_class": "measurement",
+            "value_template": "{{ value_json.gps_rtk_status }}",
+            "icon": "mdi:crosshairs-gps",
             "device": device,
         }),
-        ("humidity", {
-            "name": "Humidity",
-            "unique_id": f"{node}_humidity",
+        ("gps_fix_type", {
+            "name": "GPS Fix Type",
+            "unique_id": f"{node}_gps_fix_type",
             "state_topic": state_topic,
-            "value_template": "{{ value_json.humidity | round(1) }}",
-            "unit_of_measurement": "%",
-            "device_class": "humidity",
-            "state_class": "measurement",
+            "value_template": "{{ value_json.gps_fix_type }}",
+            "icon": "mdi:satellite-variant",
+            "entity_category": "diagnostic",
             "device": device,
         }),
-        ("pressure", {
-            "name": "Pressure",
-            "unique_id": f"{node}_pressure",
+        ("gps_num_satellites", {
+            "name": "GPS Satellites",
+            "unique_id": f"{node}_gps_num_satellites",
             "state_topic": state_topic,
-            "value_template": "{{ value_json.pressure | round(1) }}",
-            "unit_of_measurement": "hPa",
-            "device_class": "pressure",
+            "value_template": "{{ value_json.gps_num_satellites }}",
+            "state_class": "measurement",
+            "icon": "mdi:satellite-variant",
+            "entity_category": "diagnostic",
+            "device": device,
+        }),
+        ("gps_lat", {
+            "name": "GPS Latitude",
+            "unique_id": f"{node}_gps_lat",
+            "state_topic": state_topic,
+            "value_template": "{{ value_json.gps_lat }}",
+            "icon": "mdi:map-marker",
+            "device": device,
+        }),
+        ("gps_lon", {
+            "name": "GPS Longitude",
+            "unique_id": f"{node}_gps_lon",
+            "state_topic": state_topic,
+            "value_template": "{{ value_json.gps_lon }}",
+            "icon": "mdi:map-marker",
+            "device": device,
+        }),
+        ("gps_altitude_m", {
+            "name": "GPS Altitude",
+            "unique_id": f"{node}_gps_altitude_m",
+            "state_topic": state_topic,
+            "value_template": "{{ value_json.gps_altitude_m }}",
+            "unit_of_measurement": "m",
+            "device_class": "distance",
             "state_class": "measurement",
             "entity_category": "diagnostic",
             "device": device,
         }),
-        ("eco2", {
-            "name": "eCO2",
-            "unique_id": f"{node}_eco2",
+        ("gps_h_acc_m", {
+            "name": "GPS Horizontal Accuracy",
+            "unique_id": f"{node}_gps_h_acc_m",
             "state_topic": state_topic,
-            "value_template": "{{ value_json.eco2 }}",
-            "unit_of_measurement": "ppm",
-            "device_class": "carbon_dioxide",
+            "value_template": "{{ value_json.gps_h_acc_m }}",
+            "unit_of_measurement": "m",
+            "device_class": "distance",
             "state_class": "measurement",
+            "entity_category": "diagnostic",
+            "icon": "mdi:target",
             "device": device,
         }),
-        ("tvoc", {
-            "name": "TVOC",
-            "unique_id": f"{node}_tvoc",
+        ("gps_v_acc_m", {
+            "name": "GPS Vertical Accuracy",
+            "unique_id": f"{node}_gps_v_acc_m",
             "state_topic": state_topic,
-            "value_template": "{{ value_json.tvoc }}",
-            "unit_of_measurement": "ppb",
-            "device_class": "volatile_organic_compounds_parts",
+            "value_template": "{{ value_json.gps_v_acc_m }}",
+            "unit_of_measurement": "m",
+            "device_class": "distance",
             "state_class": "measurement",
+            "entity_category": "diagnostic",
+            "icon": "mdi:target",
+            "device": device,
+        }),
+        ("gps_pdop", {
+            "name": "GPS PDOP",
+            "unique_id": f"{node}_gps_pdop",
+            "state_topic": state_topic,
+            "value_template": "{{ value_json.gps_pdop }}",
+            "state_class": "measurement",
+            "entity_category": "diagnostic",
+            "icon": "mdi:target",
             "device": device,
         }),
     ]
@@ -120,11 +186,17 @@ def main() -> None:
     signal.signal(signal.SIGTERM, _handle_signal)
     signal.signal(signal.SIGINT, _handle_signal)
 
-    # ── I2C sensors ───────────────────────────────────────────────────────────
-    i2c = busio.I2C(board.SCL, board.SDA)
-    bme = adafruit_bme280.Adafruit_BME280_I2C(i2c, address=0x77)
-    ccs = adafruit_ccs811.CCS811(i2c, address=_CCS811_ADDR)
-    log.info("sensors_initialised", bme280="0x77", ccs811=hex(_CCS811_ADDR))
+    # ── GPS ──────────────────────────────────────────────────────────────────
+    gps: ZedF9pDriver | None = None
+    if settings.gps_enabled:
+        try:
+            gps_bus = smbus2.SMBus(_GPS_I2C_BUS_NUMBER)
+            gps = ZedF9pDriver(gps_bus, addr=settings.gps_i2c_addr)
+            log.info("gps_initialised", addr=hex(settings.gps_i2c_addr))
+        except Exception as e:  # noqa: BLE001 — a GPS hiccup shouldn't crash the service
+            log.warning("gps_init_failed", error=str(e))
+            gps = None
+    last_gps_fix: GpsFix | None = None
 
     # ── MQTT ─────────────────────────────────────────────────────────────────
     client: mqtt.Client = mqtt.Client(
@@ -148,25 +220,18 @@ def main() -> None:
     try:
         while _running:
             now = time.monotonic()
-            if now - last_poll >= _POLL_INTERVAL:
+            if now - last_poll >= settings.sensors_poll_interval_seconds:
+                if gps is not None:
+                    fix = gps.drain_latest_fix()
+                    if fix is not None:
+                        last_gps_fix = fix
                 try:
-                    payload: dict[str, object] = {
-                        "temperature": round(bme.temperature, 2),
-                        "humidity": round(bme.relative_humidity, 2),
-                        "pressure": round(bme.pressure, 2),
-                        "eco2": ccs.eco2 if ccs.data_ready else 0,
-                        "tvoc": ccs.tvoc if ccs.data_ready else 0,
-                        "ccs811_ready": ccs.data_ready,
-                    }
+                    payload: dict[str, object] = _gps_payload_fields(last_gps_fix)
                     client.publish(state_topic, json.dumps(payload), retain=True)
                     log.info(
                         "sensors_published",
-                        temp=payload["temperature"],
-                        humidity=payload["humidity"],
-                        pressure=payload["pressure"],
-                        eco2=payload["eco2"],
-                        tvoc=payload["tvoc"],
-                        ccs811_ready=payload["ccs811_ready"],
+                        gps_rtk_status=payload["gps_rtk_status"],
+                        gps_num_satellites=payload["gps_num_satellites"],
                     )
                 except Exception as e:
                     log.warning("sensor_read_error", error=str(e))
