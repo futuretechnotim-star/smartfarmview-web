@@ -139,6 +139,8 @@ Key docs:
 - `docs/setup-node.md` — repeatable field/gateway node provisioning procedure
 - `docs/power-hat.md` — power hat hardware spec and wiring reference
 - `docs/sensors.md` — sensor types, telemetry schema, field-node integration
+- `docs/gpsrtk.md` — GPS-RTK base station intermittency investigation: mitigations deployed, theories ruled out, open questions
+- `docs/watchdog-bench-test.md` — pico-watchdog variable-PSU bench sweep procedure for validating power-gate thresholds
 
 ---
 
