@@ -23,7 +23,7 @@ import json
 import signal
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
 import paho.mqtt.client as mqtt
@@ -43,7 +43,7 @@ _running = True
 _HASSIO_BRIDGE_IP = "172.30.32.1"
 
 # Stream resolution: half of native capture size — manageable over LTE.
-_STREAM_WIDTH = settings.capture_width // 2    # 1164
+_STREAM_WIDTH = settings.capture_width // 2  # 1164
 _STREAM_HEIGHT = settings.capture_height // 2  # 874
 
 # Pan/tilt servo channels on the PCA9685 (Arducam B0283).
@@ -56,6 +56,7 @@ _CENTER = 90
 
 # ── Frame buffer ──────────────────────────────────────────────────────────────
 
+
 class _FrameBuffer(io.BufferedIOBase):
     """Single-slot frame buffer fed by MJPEGEncoder; threads wait on condition."""
 
@@ -63,7 +64,7 @@ class _FrameBuffer(io.BufferedIOBase):
         self.frame: bytes = b""
         self._cond = threading.Condition()
 
-    def write(self, buf: bytes) -> int:
+    def write(self, buf: bytes) -> int:  # type: ignore[override]
         with self._cond:
             self.frame = buf
             self._cond.notify_all()
@@ -76,6 +77,7 @@ class _FrameBuffer(io.BufferedIOBase):
 
 
 # ── HTTP handler ──────────────────────────────────────────────────────────────
+
 
 class _Handler(BaseHTTPRequestHandler):
     buf: _FrameBuffer  # injected before server starts
@@ -121,6 +123,7 @@ class _Handler(BaseHTTPRequestHandler):
 
 # ── Pan/tilt controller ───────────────────────────────────────────────────────
 
+
 class _PanTilt:
     """Thread-safe servo controller. Sweeps smoothly to target angles."""
 
@@ -156,7 +159,9 @@ class _PanTilt:
             self._tilt = target
         return target
 
-    def _sweep(self, channel: int, start: float, end: float, steps: int = 30, delay: float = 0.02) -> None:
+    def _sweep(
+        self, channel: int, start: float, end: float, steps: int = 30, delay: float = 0.02
+    ) -> None:
         for i in range(steps + 1):
             self._kit.servo[channel].angle = start + (end - start) * i / steps
             time.sleep(delay)
@@ -164,20 +169,15 @@ class _PanTilt:
 
 # ── MQTT discovery ────────────────────────────────────────────────────────────
 
+
 def _publish_discovery(client: mqtt.Client, node_id: str, pan: float, tilt: float) -> None:
     prefix = settings.mqtt_discovery_prefix
     pan_topic = f"securitymesh/{node_id}/camera/pan"
     tilt_topic = f"securitymesh/{node_id}/camera/tilt"
     status_topic = f"securitymesh/{node_id}/camera/status"
 
-    # Device shared with gateway-power (same identifiers → same HA device card)
-    gateway_device = {
-        "identifiers": [node_id],
-        "name": "SFV Gateway",
-        "model": "Pi 5 Gateway Node",
-        "manufacturer": "SmartFarmView",
-    }
-    # Separate sub-device for the camera + pan/tilt hardware
+    # Separate sub-device for the camera + pan/tilt hardware, linked to the
+    # gateway device (created by gateway-power) via `via_device` below.
     camera_device = {
         "identifiers": [f"{node_id}_camera"],
         "name": "Gateway Camera",
@@ -188,41 +188,53 @@ def _publish_discovery(client: mqtt.Client, node_id: str, pan: float, tilt: floa
 
     entities: list[tuple[str, str, dict[str, object]]] = [
         # Camera online status
-        ("binary_sensor", f"{node_id}_camera_online", {
-            "name": "Gateway Camera Online",
-            "unique_id": f"{node_id}_camera_online",
-            "device_class": "connectivity",
-            "state_topic": status_topic,
-            "payload_on": "online",
-            "payload_off": "offline",
-            "device": camera_device,
-        }),
+        (
+            "binary_sensor",
+            f"{node_id}_camera_online",
+            {
+                "name": "Gateway Camera Online",
+                "unique_id": f"{node_id}_camera_online",
+                "device_class": "connectivity",
+                "state_topic": status_topic,
+                "payload_on": "online",
+                "payload_off": "offline",
+                "device": camera_device,
+            },
+        ),
         # Pan control
-        ("number", f"{node_id}_pan", {
-            "name": "Camera Pan",
-            "unique_id": f"{node_id}_pan",
-            "command_topic": f"{pan_topic}/set",
-            "state_topic": pan_topic,
-            "min": _PAN_MIN,
-            "max": _PAN_MAX,
-            "step": 1,
-            "unit_of_measurement": "°",
-            "icon": "mdi:pan-horizontal",
-            "device": camera_device,
-        }),
+        (
+            "number",
+            f"{node_id}_pan",
+            {
+                "name": "Camera Pan",
+                "unique_id": f"{node_id}_pan",
+                "command_topic": f"{pan_topic}/set",
+                "state_topic": pan_topic,
+                "min": _PAN_MIN,
+                "max": _PAN_MAX,
+                "step": 1,
+                "unit_of_measurement": "°",
+                "icon": "mdi:pan-horizontal",
+                "device": camera_device,
+            },
+        ),
         # Tilt control
-        ("number", f"{node_id}_tilt", {
-            "name": "Camera Tilt",
-            "unique_id": f"{node_id}_tilt",
-            "command_topic": f"{tilt_topic}/set",
-            "state_topic": tilt_topic,
-            "min": _TILT_MIN,
-            "max": _TILT_MAX,
-            "step": 1,
-            "unit_of_measurement": "°",
-            "icon": "mdi:pan-vertical",
-            "device": camera_device,
-        }),
+        (
+            "number",
+            f"{node_id}_tilt",
+            {
+                "name": "Camera Tilt",
+                "unique_id": f"{node_id}_tilt",
+                "command_topic": f"{tilt_topic}/set",
+                "state_topic": tilt_topic,
+                "min": _TILT_MIN,
+                "max": _TILT_MAX,
+                "step": 1,
+                "unit_of_measurement": "°",
+                "icon": "mdi:pan-vertical",
+                "device": camera_device,
+            },
+        ),
     ]
 
     for component, object_id, config in entities:
@@ -237,6 +249,7 @@ def _publish_discovery(client: mqtt.Client, node_id: str, pan: float, tilt: floa
 
 
 # ── Service entrypoint ────────────────────────────────────────────────────────
+
 
 def main() -> None:
     global _running
@@ -260,7 +273,7 @@ def main() -> None:
 
     # ── MQTT ─────────────────────────────────────────────────────────────────
     client: mqtt.Client = mqtt.Client(
-        mqtt.CallbackAPIVersion.VERSION2,
+        mqtt.CallbackAPIVersion.VERSION2,  # type: ignore[attr-defined]
         client_id=f"{node_id}-camera",
     )
     if settings.mqtt_username:
@@ -281,17 +294,21 @@ def main() -> None:
             return
 
         if msg.topic == pan_cmd_topic:
+
             def _do_pan() -> None:
                 new_pos = pantilt.move_pan(target)
                 c.publish(pan_state_topic, str(int(new_pos)), retain=True)
                 log.info("pan_moved", angle=new_pos)
+
             threading.Thread(target=_do_pan, daemon=True).start()
 
         elif msg.topic == tilt_cmd_topic:
+
             def _do_tilt() -> None:
                 new_pos = pantilt.move_tilt(target)
                 c.publish(tilt_state_topic, str(int(new_pos)), retain=True)
                 log.info("tilt_moved", angle=new_pos)
+
             threading.Thread(target=_do_tilt, daemon=True).start()
 
     client.on_connect = on_connect
@@ -302,7 +319,8 @@ def main() -> None:
     # ── HTTP server ───────────────────────────────────────────────────────────
     buf = _FrameBuffer()
     _Handler.buf = buf
-    server = HTTPServer(("0.0.0.0", settings.camera_stream_port), _Handler)
+    server = ThreadingHTTPServer(("0.0.0.0", settings.camera_stream_port), _Handler)
+    server.daemon_threads = True
     server_thread = threading.Thread(target=server.serve_forever, daemon=True)
     server_thread.start()
     log.info("camera_http_started", port=settings.camera_stream_port)

@@ -69,6 +69,12 @@ class Settings(BaseSettings):
     # publishes together — but this is broken out now so GPS can get its own
     # cadence later without disturbing the others.
     sensors_poll_interval_seconds: int = 60
+    # A fix older than this is dropped (published as None) rather than kept on
+    # display — the ZED-F9P can go silent on I2C while gateway-sensors keeps
+    # re-publishing the last-known fix forever otherwise, showing a stale
+    # position as if it were current. 2x the poll interval by default: one
+    # missed cycle is noise, two in a row means the module's actually stuck.
+    gps_fix_stale_timeout_s: int = 120
 
     # Home Assistant REST API — used for graceful shutdown on CRITICAL power mode.
     # Use the local address when gateway and HA share the same machine; use the

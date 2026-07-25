@@ -83,71 +83,97 @@ def _publish_gateway_discovery(client: mqtt.Client) -> None:
 
     entities: list[tuple[str, str, dict[str, object]]] = [
         # ── Power brain ──────────────────────────────────────────────────────
-        ("select", "power_mode", {
-            "name": "Power Mode",
-            "unique_id": f"{node}_power_mode",
-            "state_topic": power_topic,
-            "value_template": "{{ value_json.mode }}",
-            "options": ["NORMAL", "ECO", "LOW", "CRITICAL"],
-            "icon": "mdi:solar-power",
-            "entity_category": "diagnostic",
-            "device": device,
-        }),
-
+        (
+            "select",
+            "power_mode",
+            {
+                "name": "Power Mode",
+                "unique_id": f"{node}_power_mode",
+                "state_topic": power_topic,
+                "value_template": "{{ value_json.mode }}",
+                "options": ["NORMAL", "ECO", "LOW", "CRITICAL"],
+                "icon": "mdi:solar-power",
+                "entity_category": "diagnostic",
+                "device": device,
+            },
+        ),
         # ── Pico telemetry (value_template extracts fields from JSON blob) ───
-        ("sensor", "soc_pct", {
-            "name": "Battery SoC",
-            "unique_id": f"{node}_soc_pct",
-            "state_topic": pico_topic,
-            "value_template": "{{ value_json.soc_pct }}",
-            "unit_of_measurement": "%",
-            "device_class": "battery",
-            "state_class": "measurement",
-            "device": device,
-        }),
-        ("sensor", "voltage", {
-            "name": "Battery Voltage",
-            "unique_id": f"{node}_voltage",
-            "state_topic": pico_topic,
-            "value_template": "{{ value_json.voltage_v | round(2) }}",
-            "unit_of_measurement": "V",
-            "device_class": "voltage",
-            "state_class": "measurement",
-            "entity_category": "diagnostic",
-            "device": device,
-        }),
-        ("sensor", "load_voltage", {
-            "name": "5V Load Voltage",
-            "unique_id": f"{node}_load_voltage",
-            "state_topic": pico_topic,
-            "value_template": "{{ value_json.load_voltage_v | round(2) }}",
-            "unit_of_measurement": "V",
-            "device_class": "voltage",
-            "state_class": "measurement",
-            "entity_category": "diagnostic",
-            "device": device,
-        }),
-        ("sensor", "solar_voltage", {
-            "name": "Solar Voltage",
-            "unique_id": f"{node}_solar_voltage",
-            "state_topic": pico_topic,
-            "value_template": "{{ value_json.solar_voltage_v | round(2) }}",
-            "unit_of_measurement": "V",
-            "device_class": "voltage",
-            "state_class": "measurement",
-            "entity_category": "diagnostic",
-            "device": device,
-        }),
+        (
+            "sensor",
+            "soc_pct",
+            {
+                "name": "Battery SoC",
+                "unique_id": f"{node}_soc_pct",
+                "state_topic": pico_topic,
+                "value_template": "{{ value_json.soc_pct }}",
+                "unit_of_measurement": "%",
+                "device_class": "battery",
+                "state_class": "measurement",
+                "device": device,
+            },
+        ),
+        (
+            "sensor",
+            "voltage",
+            {
+                "name": "Battery Voltage",
+                "unique_id": f"{node}_voltage",
+                "state_topic": pico_topic,
+                "value_template": "{{ value_json.voltage_v | round(2) }}",
+                "unit_of_measurement": "V",
+                "device_class": "voltage",
+                "state_class": "measurement",
+                "suggested_display_precision": 2,
+                "entity_category": "diagnostic",
+                "device": device,
+            },
+        ),
+        (
+            "sensor",
+            "load_voltage",
+            {
+                "name": "5V Load Voltage",
+                "unique_id": f"{node}_load_voltage",
+                "state_topic": pico_topic,
+                "value_template": "{{ value_json.load_voltage_v | round(2) }}",
+                "unit_of_measurement": "V",
+                "device_class": "voltage",
+                "state_class": "measurement",
+                "suggested_display_precision": 2,
+                "entity_category": "diagnostic",
+                "device": device,
+            },
+        ),
+        (
+            "sensor",
+            "solar_voltage",
+            {
+                "name": "Solar Voltage",
+                "unique_id": f"{node}_solar_voltage",
+                "state_topic": pico_topic,
+                "value_template": "{{ value_json.solar_voltage_v | round(2) }}",
+                "unit_of_measurement": "V",
+                "device_class": "voltage",
+                "state_class": "measurement",
+                "suggested_display_precision": 2,
+                "entity_category": "diagnostic",
+                "device": device,
+            },
+        ),
         # ── Field node fleet ─────────────────────────────────────────────────
-        ("sensor", "field_nodes_online", {
-            "name": "Field Nodes Online",
-            "unique_id": f"{node}_field_nodes_online",
-            "state_topic": nodes_topic,
-            "unit_of_measurement": "nodes",
-            "icon": "mdi:access-point-network",
-            "state_class": "measurement",
-            "device": device,
-        }),
+        (
+            "sensor",
+            "field_nodes_online",
+            {
+                "name": "Field Nodes Online",
+                "unique_id": f"{node}_field_nodes_online",
+                "state_topic": nodes_topic,
+                "unit_of_measurement": "nodes",
+                "icon": "mdi:access-point-network",
+                "state_class": "measurement",
+                "device": device,
+            },
+        ),
     ]
 
     for component, object_id, config in entities:
@@ -184,8 +210,8 @@ def main() -> None:
     client = _build_client()
 
     _shutdown_requested = False
-    _field_nodes: dict[str, float] = {}   # node_id → last heartbeat monotonic time
-    _registered_nodes: set[str] = set()   # nodes whose cameras are registered in HA
+    _field_nodes: dict[str, float] = {}  # node_id → last heartbeat monotonic time
+    _registered_nodes: set[str] = set()  # nodes whose cameras are registered in HA
 
     def on_connect(c: mqtt.Client, userdata: Any, flags: Any, rc: Any, props: Any = None) -> None:
         log.info("mqtt_connected", host=settings.mqtt_host, port=settings.mqtt_port)
@@ -194,7 +220,7 @@ def main() -> None:
         # Field nodes have no dedicated heartbeat topic — telemetry.publish_heartbeat()
         # (field_node/telemetry.py) actually publishes onto the regular "telemetry"
         # topic, so that doubles as the presence signal here.
-        c.subscribe("securitymesh/+/telemetry")    # track field node presence
+        c.subscribe("securitymesh/+/telemetry")  # track field node presence
         _publish_gateway_discovery(c)
         # Publish initial power state so HA shows something before Pico connects
         _publish_power_state(c, manager)
@@ -282,10 +308,7 @@ def main() -> None:
 
             # Publish field node online count every 60 s
             if now - last_nodes_publish >= 60:
-                online = sum(
-                    1 for t in _field_nodes.values()
-                    if now - t < _NODE_TIMEOUT_SECONDS
-                )
+                online = sum(1 for t in _field_nodes.values() if now - t < _NODE_TIMEOUT_SECONDS)
                 client.publish(
                     f"securitymesh/{settings.node_id}/nodes/online",
                     str(online),

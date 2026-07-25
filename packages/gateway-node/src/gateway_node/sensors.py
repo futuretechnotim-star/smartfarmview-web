@@ -65,6 +65,12 @@ def _gps_payload_fields(fix: GpsFix | None) -> dict[str, object]:
     }
 
 
+def _is_fix_stale(age_s: float, timeout_s: float) -> bool:
+    """True once a fix is old enough to stop trusting — see
+    Settings.gps_fix_stale_timeout_s for why this exists."""
+    return age_s > timeout_s
+
+
 def _handle_signal(signum: int, frame: object) -> None:
     global _running
     _running = False
@@ -86,94 +92,121 @@ def _publish_discovery(client: mqtt.Client) -> None:
     device = _gateway_device()
 
     entities: list[tuple[str, dict[str, object]]] = [
-        ("gps_rtk_status", {
-            "name": "GPS RTK Status",
-            "unique_id": f"{node}_gps_rtk_status",
-            "state_topic": state_topic,
-            "value_template": "{{ value_json.gps_rtk_status }}",
-            "icon": "mdi:crosshairs-gps",
-            "device": device,
-        }),
-        ("gps_fix_type", {
-            "name": "GPS Fix Type",
-            "unique_id": f"{node}_gps_fix_type",
-            "state_topic": state_topic,
-            "value_template": "{{ value_json.gps_fix_type }}",
-            "icon": "mdi:satellite-variant",
-            "entity_category": "diagnostic",
-            "device": device,
-        }),
-        ("gps_num_satellites", {
-            "name": "GPS Satellites",
-            "unique_id": f"{node}_gps_num_satellites",
-            "state_topic": state_topic,
-            "value_template": "{{ value_json.gps_num_satellites }}",
-            "state_class": "measurement",
-            "icon": "mdi:satellite-variant",
-            "entity_category": "diagnostic",
-            "device": device,
-        }),
-        ("gps_lat", {
-            "name": "GPS Latitude",
-            "unique_id": f"{node}_gps_lat",
-            "state_topic": state_topic,
-            "value_template": "{{ value_json.gps_lat }}",
-            "icon": "mdi:map-marker",
-            "device": device,
-        }),
-        ("gps_lon", {
-            "name": "GPS Longitude",
-            "unique_id": f"{node}_gps_lon",
-            "state_topic": state_topic,
-            "value_template": "{{ value_json.gps_lon }}",
-            "icon": "mdi:map-marker",
-            "device": device,
-        }),
-        ("gps_altitude_m", {
-            "name": "GPS Altitude",
-            "unique_id": f"{node}_gps_altitude_m",
-            "state_topic": state_topic,
-            "value_template": "{{ value_json.gps_altitude_m }}",
-            "unit_of_measurement": "m",
-            "device_class": "distance",
-            "state_class": "measurement",
-            "entity_category": "diagnostic",
-            "device": device,
-        }),
-        ("gps_h_acc_m", {
-            "name": "GPS Horizontal Accuracy",
-            "unique_id": f"{node}_gps_h_acc_m",
-            "state_topic": state_topic,
-            "value_template": "{{ value_json.gps_h_acc_m }}",
-            "unit_of_measurement": "m",
-            "device_class": "distance",
-            "state_class": "measurement",
-            "entity_category": "diagnostic",
-            "icon": "mdi:target",
-            "device": device,
-        }),
-        ("gps_v_acc_m", {
-            "name": "GPS Vertical Accuracy",
-            "unique_id": f"{node}_gps_v_acc_m",
-            "state_topic": state_topic,
-            "value_template": "{{ value_json.gps_v_acc_m }}",
-            "unit_of_measurement": "m",
-            "device_class": "distance",
-            "state_class": "measurement",
-            "entity_category": "diagnostic",
-            "icon": "mdi:target",
-            "device": device,
-        }),
-        ("gps_pdop", {
-            "name": "GPS PDOP",
-            "unique_id": f"{node}_gps_pdop",
-            "state_topic": state_topic,
-            "value_template": "{{ value_json.gps_pdop }}",
-            "state_class": "measurement",
-            "entity_category": "diagnostic",
-            "icon": "mdi:target",
-            "device": device,
-        }),
+        (
+            "gps_rtk_status",
+            {
+                "name": "GPS RTK Status",
+                "unique_id": f"{node}_gps_rtk_status",
+                "state_topic": state_topic,
+                "value_template": "{{ value_json.gps_rtk_status }}",
+                "icon": "mdi:crosshairs-gps",
+                "device": device,
+            },
+        ),
+        (
+            "gps_fix_type",
+            {
+                "name": "GPS Fix Type",
+                "unique_id": f"{node}_gps_fix_type",
+                "state_topic": state_topic,
+                "value_template": "{{ value_json.gps_fix_type }}",
+                "icon": "mdi:satellite-variant",
+                "entity_category": "diagnostic",
+                "device": device,
+            },
+        ),
+        (
+            "gps_num_satellites",
+            {
+                "name": "GPS Satellites",
+                "unique_id": f"{node}_gps_num_satellites",
+                "state_topic": state_topic,
+                "value_template": "{{ value_json.gps_num_satellites }}",
+                "state_class": "measurement",
+                "icon": "mdi:satellite-variant",
+                "entity_category": "diagnostic",
+                "device": device,
+            },
+        ),
+        (
+            "gps_lat",
+            {
+                "name": "GPS Latitude",
+                "unique_id": f"{node}_gps_lat",
+                "state_topic": state_topic,
+                "value_template": "{{ value_json.gps_lat }}",
+                "icon": "mdi:map-marker",
+                "device": device,
+            },
+        ),
+        (
+            "gps_lon",
+            {
+                "name": "GPS Longitude",
+                "unique_id": f"{node}_gps_lon",
+                "state_topic": state_topic,
+                "value_template": "{{ value_json.gps_lon }}",
+                "icon": "mdi:map-marker",
+                "device": device,
+            },
+        ),
+        (
+            "gps_altitude_m",
+            {
+                "name": "GPS Altitude",
+                "unique_id": f"{node}_gps_altitude_m",
+                "state_topic": state_topic,
+                "value_template": "{{ value_json.gps_altitude_m }}",
+                "unit_of_measurement": "m",
+                "device_class": "distance",
+                "state_class": "measurement",
+                "entity_category": "diagnostic",
+                "device": device,
+            },
+        ),
+        (
+            "gps_h_acc_m",
+            {
+                "name": "GPS Horizontal Accuracy",
+                "unique_id": f"{node}_gps_h_acc_m",
+                "state_topic": state_topic,
+                "value_template": "{{ value_json.gps_h_acc_m }}",
+                "unit_of_measurement": "m",
+                "device_class": "distance",
+                "state_class": "measurement",
+                "entity_category": "diagnostic",
+                "icon": "mdi:target",
+                "device": device,
+            },
+        ),
+        (
+            "gps_v_acc_m",
+            {
+                "name": "GPS Vertical Accuracy",
+                "unique_id": f"{node}_gps_v_acc_m",
+                "state_topic": state_topic,
+                "value_template": "{{ value_json.gps_v_acc_m }}",
+                "unit_of_measurement": "m",
+                "device_class": "distance",
+                "state_class": "measurement",
+                "entity_category": "diagnostic",
+                "icon": "mdi:target",
+                "device": device,
+            },
+        ),
+        (
+            "gps_pdop",
+            {
+                "name": "GPS PDOP",
+                "unique_id": f"{node}_gps_pdop",
+                "state_topic": state_topic,
+                "value_template": "{{ value_json.gps_pdop }}",
+                "state_class": "measurement",
+                "entity_category": "diagnostic",
+                "icon": "mdi:target",
+                "device": device,
+            },
+        ),
     ]
 
     for object_id, config in entities:
@@ -197,16 +230,19 @@ def main() -> None:
             log.warning("gps_init_failed", error=str(e))
             gps = None
     last_gps_fix: GpsFix | None = None
+    last_gps_fix_monotonic = 0.0
 
     # ── MQTT ─────────────────────────────────────────────────────────────────
     client: mqtt.Client = mqtt.Client(
-        mqtt.CallbackAPIVersion.VERSION2,
+        mqtt.CallbackAPIVersion.VERSION2,  # type: ignore[attr-defined]
         client_id=f"{settings.node_id}-sensors",
     )
     if settings.mqtt_username:
         client.username_pw_set(settings.mqtt_username, settings.mqtt_password)
 
-    def on_connect(c: mqtt.Client, userdata: object, flags: object, rc: object, props: object = None) -> None:
+    def on_connect(
+        c: mqtt.Client, userdata: object, flags: object, rc: object, props: object = None
+    ) -> None:
         log.info("mqtt_connected")
         _publish_discovery(c)
 
@@ -220,11 +256,31 @@ def main() -> None:
     try:
         while _running:
             now = time.monotonic()
+
+            # Drain the GPS module every loop tick (~1s), independent of the
+            # publish cadence below. The ZED-F9P's I2C output buffer is small
+            # and a NAV-PVT frame lands every second — waiting a full
+            # sensors_poll_interval_seconds (60s default) between drains lets
+            # far more back up than the buffer holds, overflowing it and
+            # corrupting/dropping frames long before anything looks like an
+            # I2C error. Confirmed against a standalone script that drained
+            # every ~0.2s and never dropped a fix in 175s straight, versus
+            # this service (draining only once a minute) rarely holding one.
+            if gps is not None:
+                fix = gps.drain_latest_fix()
+                if fix is not None:
+                    last_gps_fix = fix
+                    last_gps_fix_monotonic = now
+
             if now - last_poll >= settings.sensors_poll_interval_seconds:
-                if gps is not None:
-                    fix = gps.drain_latest_fix()
-                    if fix is not None:
-                        last_gps_fix = fix
+                if last_gps_fix is not None and _is_fix_stale(
+                    now - last_gps_fix_monotonic, settings.gps_fix_stale_timeout_s
+                ):
+                    log.warning(
+                        "gps_fix_stale_dropping",
+                        age_s=round(now - last_gps_fix_monotonic, 1),
+                    )
+                    last_gps_fix = None
                 try:
                     payload: dict[str, object] = _gps_payload_fields(last_gps_fix)
                     client.publish(state_topic, json.dumps(payload), retain=True)
