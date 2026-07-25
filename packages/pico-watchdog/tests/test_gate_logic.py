@@ -82,23 +82,26 @@ class TestHaltConfirmed:
     def test_cuts_power_immediately_from_pi_on(self):
         # Healthy voltage, no shutdown ever requested — still cut if the Pi
         # genuinely halted (e.g. a manual `sudo shutdown` bypassing the gate).
-        assert gl.decide(
-            gl.PI_ON, 13.4, 0.0, 0.0, halt_confirmed=True, **THRESHOLDS
-        ) == (gl.PI_OFF, gl.ACTION_CUT_POWER)
+        assert gl.decide(gl.PI_ON, 13.4, 0.0, 0.0, halt_confirmed=True, **THRESHOLDS) == (
+            gl.PI_OFF,
+            gl.ACTION_CUT_POWER,
+        )
 
     def test_cuts_power_immediately_from_shutting_down_without_waiting_grace(self):
-        assert gl.decide(
-            gl.SHUTTING_DOWN, 11.5, 1.0, 0.0, halt_confirmed=True, **THRESHOLDS
-        ) == (gl.PI_OFF, gl.ACTION_CUT_POWER)
+        assert gl.decide(gl.SHUTTING_DOWN, 11.5, 1.0, 0.0, halt_confirmed=True, **THRESHOLDS) == (
+            gl.PI_OFF,
+            gl.ACTION_CUT_POWER,
+        )
 
     def test_false_is_a_no_op_default(self):
         # Disconnected/absent wire must default to False and change nothing.
         assert decide(gl.PI_ON, 13.4) == (gl.PI_ON, gl.ACTION_NONE)
 
     def test_no_effect_once_already_off(self):
-        assert gl.decide(
-            gl.PI_OFF, 11.5, 0.0, 0.0, halt_confirmed=True, **THRESHOLDS
-        ) == (gl.PI_OFF, gl.ACTION_NONE)
+        assert gl.decide(gl.PI_OFF, 11.5, 0.0, 0.0, halt_confirmed=True, **THRESHOLDS) == (
+            gl.PI_OFF,
+            gl.ACTION_NONE,
+        )
 
     def test_no_restore_while_halt_confirmed_even_with_healthy_voltage(self):
         # Regression: caught live on hardware as a cut/restore/cut oscillation.
@@ -108,11 +111,13 @@ class TestHaltConfirmed:
         # through the Pico's pull-down), and the whole point of the software
         # CRITICAL path is to react before voltage actually drops, so reading
         # "healthy" the instant we cut is the expected case, not a bug.
-        assert gl.decide(
-            gl.PI_OFF, 13.4, 0.0, 0.0, halt_confirmed=True, **THRESHOLDS
-        ) == (gl.PI_OFF, gl.ACTION_NONE)
+        assert gl.decide(gl.PI_OFF, 13.4, 0.0, 0.0, halt_confirmed=True, **THRESHOLDS) == (
+            gl.PI_OFF,
+            gl.ACTION_NONE,
+        )
 
     def test_restores_once_halt_confirmed_clears(self):
-        assert gl.decide(
-            gl.PI_OFF, 13.4, 0.0, 0.0, halt_confirmed=False, **THRESHOLDS
-        ) == (gl.PI_ON, gl.ACTION_RESTORE_POWER)
+        assert gl.decide(gl.PI_OFF, 13.4, 0.0, 0.0, halt_confirmed=False, **THRESHOLDS) == (
+            gl.PI_ON,
+            gl.ACTION_RESTORE_POWER,
+        )

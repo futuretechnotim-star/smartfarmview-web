@@ -40,8 +40,7 @@ class BME280:
 
         var1 = ((adc_t >> 3) - (self._dig_t1 << 1)) * self._dig_t2 >> 11
         var2 = (
-            (((adc_t >> 4) - self._dig_t1) * ((adc_t >> 4) - self._dig_t1) >> 12)
-            * self._dig_t3
+            (((adc_t >> 4) - self._dig_t1) * ((adc_t >> 4) - self._dig_t1) >> 12) * self._dig_t3
         ) >> 14
         t_fine = var1 + var2
         return ((t_fine * 5 + 128) >> 8) / 100.0
