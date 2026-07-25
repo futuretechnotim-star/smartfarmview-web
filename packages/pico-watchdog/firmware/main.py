@@ -46,6 +46,7 @@ import ota
 import ota_prep
 from bme280 import BME280
 from ina3221 import INA3221
+from local_log import RollingLog
 from machine import ADC, I2C, Pin  # type: ignore[import-not-found]
 from mqtt_link import MQTTLink
 from soc import lifepo4_soc
@@ -145,7 +146,9 @@ def _prepare_and_apply_ota(link: MQTTLink, halt_confirmed_pin: Pin, base_url: st
             link.publish_telemetry({"ota_status": "aborted_gateway_did_not_halt"})
             return
 
-        link.publish_telemetry({"ota_status": "waiting_for_gateway_halt", "elapsed_s": round(elapsed, 1)})
+        link.publish_telemetry(
+            {"ota_status": "waiting_for_gateway_halt", "elapsed_s": round(elapsed, 1)}
+        )
         time.sleep(config.LOOP_INTERVAL_S)
 
     link.publish_telemetry({"ota_status": "activating"})
@@ -167,6 +170,9 @@ _PSU_RELAY_OFF = 1  # energized -> NC open -> power cut
 
 
 def main() -> None:
+    log = RollingLog(config.LOCAL_LOG_PATH, max_bytes=config.LOCAL_LOG_MAX_BYTES)
+    log.append("boot")
+
     power_en = Pin(config.PIN_PI_POWER_EN, Pin.OUT, value=1)
     psu_relay = Pin(config.PIN_PSU_RELAY, Pin.OUT, value=_PSU_RELAY_ON)  # NC-wired — see above
     shutdown_req = Pin(config.PIN_SHUTDOWN_REQ, Pin.OUT, value=0)
@@ -174,8 +180,7 @@ def main() -> None:
     halt_confirmed_pin = Pin(config.PIN_HALT_CONFIRMED, Pin.IN, Pin.PULL_DOWN)
     adc = ADC(Pin(config.PIN_BATTERY_ADC))
 
-    i2c = I2C(0, sda=Pin(config.PIN_I2C_SDA), scl=Pin(config.PIN_I2C_SCL),
-              freq=config.I2C_FREQ)
+    i2c = I2C(0, sda=Pin(config.PIN_I2C_SDA), scl=Pin(config.PIN_I2C_SCL), freq=config.I2C_FREQ)
     try:
         ina: INA3221 | None = INA3221(i2c, addr=config.INA3221_ADDR)
     except Exception:
@@ -187,6 +192,7 @@ def main() -> None:
 
     wlan = network.WLAN(network.STA_IF)
     _connect_wifi(wlan)
+    log.append(f"wifi_connect_attempt result={wlan.isconnected()}")
     last_wifi_reconnect_attempt = time.time()
     link = MQTTLink(
         "gateway-pico",
@@ -195,6 +201,7 @@ def main() -> None:
         secrets.MQTT_PASSWORD,
     )
     link.connect()
+    log.append(f"mqtt_connect_attempt result={link.is_connected()}")
     last_mqtt_reconnect_attempt = time.time()
 
     state = gate_logic.PI_ON
@@ -204,12 +211,20 @@ def main() -> None:
 
     while True:
         now = time.time()
-        if not wlan.isconnected() and now - last_wifi_reconnect_attempt >= config.WIFI_RECONNECT_INTERVAL_S:
+        if (
+            not wlan.isconnected()
+            and now - last_wifi_reconnect_attempt >= config.WIFI_RECONNECT_INTERVAL_S
+        ):
             _connect_wifi(wlan)
+            log.append(f"wifi_reconnect_attempt result={wlan.isconnected()}")
             last_wifi_reconnect_attempt = now
 
-        if not link.is_connected() and now - last_mqtt_reconnect_attempt >= config.MQTT_RECONNECT_INTERVAL_S:
+        if (
+            not link.is_connected()
+            and now - last_mqtt_reconnect_attempt >= config.MQTT_RECONNECT_INTERVAL_S
+        ):
             link.connect()
+            log.append(f"mqtt_reconnect_attempt result={link.is_connected()}")
             last_mqtt_reconnect_attempt = now
 
         link.poll()
@@ -247,6 +262,13 @@ def main() -> None:
             halt_confirmed=bool(halt_confirmed_pin.value()),
         )
 
+        if action != gate_logic.ACTION_NONE:
+            log.append(
+                f"action={action} state={state} new_state={new_state} voltage={voltage:.2f} "
+                f"v_source={v_source} heartbeat_age_s={link.heartbeat_age_s():.1f} "
+                f"halt_confirmed={halt_confirmed_pin.value()}"
+            )
+
         if action == gate_logic.ACTION_REQUEST_SHUTDOWN:
             shutdown_req.value(1)
         elif action == gate_logic.ACTION_CUT_POWER:
@@ -270,6 +292,12 @@ def main() -> None:
             state_since = now
 
         if now - last_telemetry >= config.TELEMETRY_INTERVAL_S:
+            log.append(
+                f"snapshot state={state} voltage={voltage:.2f} v_source={v_source} "
+                f"soc_pct={lifepo4_soc(voltage)} heartbeat_age_s={link.heartbeat_age_s():.1f} "
+                f"halt_confirmed={halt_confirmed_pin.value()} wifi={wlan.isconnected()} "
+                f"mqtt={link.is_connected()} fan_on={fan_on}"
+            )
             link.publish_telemetry(
                 {
                     "soc_pct": lifepo4_soc(voltage),
