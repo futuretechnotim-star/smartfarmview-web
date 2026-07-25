@@ -1,16 +1,32 @@
 """Tests for the pure UBX/ZED-F9P protocol parsing (gps_protocol.py)."""
 
+import struct
+
 from gateway_node.gps_protocol import (
+    CFG_I2COUTPROT_NMEA,
+    CFG_I2COUTPROT_RTCM3X,
+    CFG_LAYER_BBR,
+    CFG_LAYER_FLASH,
+    CFG_LAYER_RAM,
+    CFG_MSGOUT_UBX_NAV_PVT_I2C,
     NAV_PVT_LENGTH,
     NAV_PVT_STRUCT,
     RTK_FIXED,
     RTK_FLOAT,
     RTK_NONE,
+    UBX_ACK_ACK,
+    UBX_ACK_NAK,
+    UBX_CFG_VALSET,
+    UBX_CLASS_ACK,
     UBX_CLASS_CFG,
     UBX_CLASS_NAV,
     UBX_NAV_PVT,
+    UBX_SYNC_CHAR_1,
+    UBX_SYNC_CHAR_2,
     UbxStreamParser,
+    build_cfg_valset,
     build_ubx_frame,
+    find_ack,
     parse_nav_pvt,
     verify_checksum,
 )
@@ -53,7 +69,11 @@ def _nav_pvt_payload(
         height_mm,  # hMSL (unused by our parser)
         h_acc_mm,
         v_acc_mm,
-        0, 0, 0, 0, 0,  # velN velE velD gSpeed headMot
+        0,
+        0,
+        0,
+        0,
+        0,  # velN velE velD gSpeed headMot
         0,  # sAcc
         0,  # headAcc
         pdop_scaled,
@@ -66,7 +86,9 @@ class TestParseNavPvt:
         assert parse_nav_pvt(b"\x00" * 10) is None
 
     def test_extracts_position_and_accuracy(self):
-        payload = _nav_pvt_payload(lat_deg=40.123456, lon_deg=-83.123456, height_mm=250_000, h_acc_mm=15)
+        payload = _nav_pvt_payload(
+            lat_deg=40.123456, lon_deg=-83.123456, height_mm=250_000, h_acc_mm=15
+        )
         fix = parse_nav_pvt(payload)
         assert fix is not None
         assert round(fix.latitude, 6) == 40.123456
@@ -147,3 +169,73 @@ class TestUbxStreamParser:
         frame = build_ubx_frame(UBX_CLASS_NAV, UBX_NAV_PVT, _nav_pvt_payload())
         frames = parser.feed(frame + frame)
         assert len(frames) == 2
+
+    def test_recovers_from_bogus_large_length(self):
+        # A spurious sync followed by a huge length field (0xFFFF) must NOT
+        # block the real frame behind it. Before the resync guard this
+        # deadlocked the parser for the life of the process.
+        parser = UbxStreamParser()
+        bogus = bytes([UBX_SYNC_CHAR_1, UBX_SYNC_CHAR_2, 0x99, 0x99, 0xFF, 0xFF])
+        good = build_ubx_frame(UBX_CLASS_NAV, UBX_NAV_PVT, _nav_pvt_payload())
+        frames = parser.feed(bogus + good)
+        assert len(frames) == 1
+        assert (frames[0][0], frames[0][1]) == (UBX_CLASS_NAV, UBX_NAV_PVT)
+
+    def test_recovers_from_false_sync_with_bad_checksum(self):
+        # A false sync with a small, plausible length whose frame fails the
+        # checksum must resync (skip a byte) and still find the real frame,
+        # rather than discarding the whole claimed span.
+        parser = UbxStreamParser()
+        false = bytes(
+            [UBX_SYNC_CHAR_1, UBX_SYNC_CHAR_2, 0x01, 0x02, 0x03, 0x00, 0xAA, 0xBB, 0xCC, 0x00, 0x00]
+        )
+        good = build_ubx_frame(UBX_CLASS_NAV, UBX_NAV_PVT, _nav_pvt_payload())
+        frames = parser.feed(false + good)
+        assert len(frames) == 1
+
+
+class TestBuildCfgValset:
+    def test_encodes_header_keys_and_values(self):
+        frame = build_cfg_valset(
+            [(CFG_I2COUTPROT_NMEA, 0), (CFG_MSGOUT_UBX_NAV_PVT_I2C, 1)],
+            CFG_LAYER_RAM | CFG_LAYER_BBR | CFG_LAYER_FLASH,
+        )
+        assert verify_checksum(frame)
+        ((cls, mid, payload),) = UbxStreamParser().feed(frame)
+        assert (cls, mid) == (UBX_CLASS_CFG, UBX_CFG_VALSET)
+        assert payload[0] == 0x00  # version
+        assert payload[1] == 0x07  # layers: RAM | BBR | Flash
+        assert payload[2:4] == b"\x00\x00"  # reserved
+        assert payload[4:8] == struct.pack("<I", CFG_I2COUTPROT_NMEA)
+        assert payload[8] == 0
+        assert payload[9:13] == struct.pack("<I", CFG_MSGOUT_UBX_NAV_PVT_I2C)
+        assert payload[13] == 1
+
+    def test_ram_only_layer_byte(self):
+        frame = build_cfg_valset([(CFG_I2COUTPROT_RTCM3X, 0)], CFG_LAYER_RAM)
+        ((_, _, payload),) = UbxStreamParser().feed(frame)
+        assert payload[1] == 0x01
+
+
+def _ack_frame(is_ack: bool, cls: int, mid: int) -> bytes:
+    return build_ubx_frame(UBX_CLASS_ACK, UBX_ACK_ACK if is_ack else UBX_ACK_NAK, bytes([cls, mid]))
+
+
+class TestFindAck:
+    def test_returns_true_on_ack(self):
+        frames = UbxStreamParser().feed(_ack_frame(True, UBX_CLASS_CFG, UBX_CFG_VALSET))
+        assert find_ack(frames, UBX_CLASS_CFG, UBX_CFG_VALSET) is True
+
+    def test_returns_false_on_nak(self):
+        frames = UbxStreamParser().feed(_ack_frame(False, UBX_CLASS_CFG, UBX_CFG_VALSET))
+        assert find_ack(frames, UBX_CLASS_CFG, UBX_CFG_VALSET) is False
+
+    def test_returns_none_when_no_ack_present(self):
+        frames = UbxStreamParser().feed(
+            build_ubx_frame(UBX_CLASS_NAV, UBX_NAV_PVT, _nav_pvt_payload())
+        )
+        assert find_ack(frames, UBX_CLASS_CFG, UBX_CFG_VALSET) is None
+
+    def test_ignores_ack_for_a_different_message(self):
+        frames = UbxStreamParser().feed(_ack_frame(True, UBX_CLASS_CFG, 0x01))
+        assert find_ack(frames, UBX_CLASS_CFG, UBX_CFG_VALSET) is None
