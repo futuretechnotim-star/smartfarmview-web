@@ -47,7 +47,7 @@ import ota_prep
 from bme280 import BME280
 from ina3221 import INA3221
 from local_log import RollingLog
-from machine import ADC, I2C, Pin  # type: ignore[import-not-found]
+from machine import ADC, I2C, Pin, reset  # type: ignore[import-not-found]
 from mqtt_link import MQTTLink
 from soc import lifepo4_soc
 
@@ -58,13 +58,25 @@ def _connect_wifi(wlan: "network.WLAN") -> None:
     (e.g. the gateway restarting around the same time as the Pico), a
     one-shot attempt at boot leaves the Pico permanently disconnected for the
     rest of that power cycle."""
+    # Full radio reset before connecting. MicroPython WiFi can wedge after the
+    # AP drops — which it does on every gateway low-voltage cut / OTA / reboot —
+    # and a bare active(True)+connect() won't recover (isconnected() can even
+    # sit stale-True on a dead link). Bouncing active() re-inits the radio so
+    # re-association actually works. This is what lets a far, marginal node
+    # (or this one) self-heal unattended in the field instead of needing a
+    # physical power-cycle.
+    try:  # noqa: SIM105
+        wlan.disconnect()
+    except Exception:  # noqa: BLE001 — best-effort; may not be connected
+        pass
+    wlan.active(False)
+    time.sleep(0.5)
     wlan.active(True)
-    if not wlan.isconnected():
-        wlan.connect(secrets.WIFI_SSID, secrets.WIFI_PASSWORD)
-        for _ in range(20):  # ~10 s max; safety loop continues regardless
-            if wlan.isconnected():
-                break
-            time.sleep(0.5)
+    wlan.connect(secrets.WIFI_SSID, secrets.WIFI_PASSWORD)
+    for _ in range(20):  # ~10 s max; safety loop continues regardless
+        if wlan.isconnected():
+            break
+        time.sleep(0.5)
 
 
 def _read_voltage(ina: "INA3221 | None", adc: ADC) -> tuple[float, str]:
@@ -209,6 +221,7 @@ def main() -> None:
     last_telemetry = 0.0
     fan_on = fan_logic.FAN_OFF
     mqtt_was_connected = False
+    last_mqtt_ok = time.time()
 
     while True:
         now = time.time()
@@ -235,6 +248,19 @@ def main() -> None:
         if link.is_connected() and not mqtt_was_connected:
             link.publish(config.LOG_TOPIC, {"log": log.tail(config.LOG_TAIL_LINES)}, retain=True)
         mqtt_was_connected = link.is_connected()
+
+        # Connectivity self-heal (last resort). While the Pi should be up
+        # (PI_ON) the broker is reachable, so sustained MQTT loss means our own
+        # link is wedged in a way even the radio-bounce reconnect hasn't
+        # cleared — reboot to recover unattended. Safe while PI_ON: the NC relay
+        # keeps the Pi powered across the Pico's reset. Gated on PI_ON so a
+        # legitimate broker-down window (Pi off in PI_OFF) never triggers it.
+        if state == gate_logic.PI_ON and link.is_connected():
+            last_mqtt_ok = now
+        elif state == gate_logic.PI_ON and now - last_mqtt_ok >= config.NET_RECOVERY_TIMEOUT_S:
+            log.append(f"net_recovery_reset offline_s={round(now - last_mqtt_ok)}")
+            time.sleep(0.3)  # let the flash write land before we reset
+            reset()
 
         ota_base_url = link.pop_pending_ota()
         if ota_base_url is not None:

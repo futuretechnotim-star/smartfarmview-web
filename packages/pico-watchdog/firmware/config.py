@@ -90,6 +90,11 @@ WIFI_RECONNECT_INTERVAL_S = 60  # how often to retry WiFi after a failed/dropped
 # the Pi before it ever gets back on the broker (a ~5-min reboot loop). 30s gives
 # many reconnect attempts inside one heartbeat window.
 MQTT_RECONNECT_INTERVAL_S = 30  # how often to retry MQTT after a dropped connection
+# PI_ON but no MQTT for this long → assume a wedged radio the reconnect (even
+# with a radio bounce) can't clear, and machine.reset() to self-heal. Generous
+# so it never thrashes; only fires while PI_ON (a Pico reset there keeps the Pi
+# powered via the NC relay).
+NET_RECOVERY_TIMEOUT_S = 900
 
 # --- Local log ---------------------------------------------------------------
 # Bounded on-flash event log for troubleshooting when MQTT is unreachable —
