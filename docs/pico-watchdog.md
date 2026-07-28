@@ -28,10 +28,10 @@ The state machine is [`gate_logic.py`](../packages/pico-watchdog/firmware/gate_l
 — pure and unit-tested under CPython because it is safety-critical:
 
 ```
-PI_ON ──(V ≤ shutdown_voltage)──► SHUTTING_DOWN ──(grace elapsed)──► PI_OFF
-  ▲                                                                    │
-  └──────────────────(V ≥ recovery_voltage)───────────────────────────┘
-PI_ON ──(heartbeat stale)──► power-cycle, stay PI_ON
+PI_ON ──(V ≤ shutdown_voltage)──► SHUTTING_DOWN ──(halt_confirmed | grace elapsed | V ≤ hard_cutoff)──► PI_OFF
+  ▲                                                                                                      │
+  └──────────────────────────────(V ≥ recovery_voltage)─────────────────────────────────────────────────┘
+PI_ON ──(heartbeat stale AND mqtt connected)──► power-cycle, stay PI_ON
 ```
 
 `halt_confirmed` (GP18, from the Pi's `gpio-poweroff`) lets the gate cut as soon
@@ -95,10 +95,13 @@ it fails static rather than forcing an assumption.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `SHUTDOWN_VOLTAGE` | 12.0 V | request shutdown then cut (must be **below** gateway software CRITICAL) |
+| `SHUTDOWN_VOLTAGE` | 12.5 V | **request** graceful halt — Pi still has 5V headroom (must be **below** gateway software CRITICAL ≈ 12.8 V / 25% SoC) |
+| `HARD_CUTOFF_VOLTAGE` | 12.0 V | **force** relay open regardless of halt state — battery-protection floor |
 | `RECOVERY_VOLTAGE` | 13.2 V | safe to re-power |
-| `GRACE_SECONDS` | 90 | max wait for the Pi to halt |
-| `HEARTBEAT_TIMEOUT_S` | 300 | stale heartbeat → reboot |
+| `GRACE_SECONDS` | 90 | max wait for the Pi to halt (before a forced cut) |
+| `HEARTBEAT_TIMEOUT_S` | 300 | stale heartbeat → reboot (only while the Pico's own MQTT is connected) |
+| `HALT_SETTLE_SECONDS` | 30 | max time an asserted `halt_confirmed` holds the gate in `PI_OFF` before voltage governs |
+| `MQTT_RECONNECT_INTERVAL_S` | 30 | broker reconnect retry — must stay **well below** `HEARTBEAT_TIMEOUT_S` |
 | `FAN_ON_TEMP_C` | 35.0 | enclosure temp at/above which the fan turns on |
 | `FAN_OFF_TEMP_C` | 30.0 | enclosure temp at/below which the fan turns back off |
 

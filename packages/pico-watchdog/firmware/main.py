@@ -256,11 +256,13 @@ def main() -> None:
             now - state_since,
             link.heartbeat_age_s(),
             shutdown_voltage=config.SHUTDOWN_VOLTAGE,
+            hard_cutoff_voltage=config.HARD_CUTOFF_VOLTAGE,
             recovery_voltage=config.RECOVERY_VOLTAGE,
             grace_seconds=config.GRACE_SECONDS,
             heartbeat_timeout_s=config.HEARTBEAT_TIMEOUT_S,
             halt_confirmed=bool(halt_confirmed_pin.value()),
             halt_settle_seconds=config.HALT_SETTLE_SECONDS,
+            mqtt_connected=link.is_connected(),
         )
 
         if action != gate_logic.ACTION_NONE:

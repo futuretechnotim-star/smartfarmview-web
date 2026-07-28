@@ -10,7 +10,16 @@ dataset (see docs/gateway-node.md).
 # LiFePO4 rests very flat (~13.0-13.3V most of its range), so use conservative
 # points. shutdown_voltage MUST be below the gateway software CRITICAL level so
 # Home Assistant halts gracefully first; the gate is the backstop.
-SHUTDOWN_VOLTAGE = 12.0  # ~low SoC under light load → request shutdown then cut
+# Two-stage low-voltage handling (see gate_logic.decide):
+#  - at SHUTDOWN_VOLTAGE, request a graceful halt while the Pi still has 5V
+#    headroom — the 12→5V buck browns out near its dropout, so this sits well
+#    above the floor (bench test: the Pi lost its network by ~12.1-12.2V input);
+#  - at HARD_CUTOFF_VOLTAGE, force the relay open regardless of halt state to
+#    stop deep-discharging the pack.
+# Both sit BELOW the gateway software's CRITICAL level (~25% SoC ≈ 12.8V), so
+# Home Assistant sheds load / halts first and the gate is only the backstop.
+SHUTDOWN_VOLTAGE = 12.5  # request graceful shutdown (backstop below HA CRITICAL)
+HARD_CUTOFF_VOLTAGE = 12.0  # force relay open — battery-protection floor
 RECOVERY_VOLTAGE = 13.2  # charging well underway → safe to re-power the Pi
 GRACE_SECONDS = 90  # max time to wait for the Pi to halt after SHUTDOWN_REQ
 HEARTBEAT_TIMEOUT_S = 300  # no Pi heartbeat for this long (while ON) → reboot
@@ -72,7 +81,11 @@ GATEWAY_CMD_TOPIC = b"securitymesh/sfv-gateway/cmd"  # gateway_node's own comman
 LOOP_INTERVAL_S = 5  # how often to sample voltage and run the state machine
 TELEMETRY_INTERVAL_S = 30  # how often to publish telemetry
 WIFI_RECONNECT_INTERVAL_S = 60  # how often to retry WiFi after a failed/dropped connection
-MQTT_RECONNECT_INTERVAL_S = 300  # how often to retry MQTT after a dropped connection
+# Must be well below HEARTBEAT_TIMEOUT_S: the heartbeat arrives over MQTT, so if
+# reconnect is as slow as the heartbeat timeout the Pico can time out and reboot
+# the Pi before it ever gets back on the broker (a ~5-min reboot loop). 30s gives
+# many reconnect attempts inside one heartbeat window.
+MQTT_RECONNECT_INTERVAL_S = 30  # how often to retry MQTT after a dropped connection
 
 # --- Local log ---------------------------------------------------------------
 # Bounded on-flash event log for troubleshooting when MQTT is unreachable —

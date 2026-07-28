@@ -9,7 +9,8 @@ the ``firmware`` pythonpath entry.
 import gate_logic as gl
 
 THRESHOLDS = {
-    "shutdown_voltage": 12.0,
+    "shutdown_voltage": 12.5,
+    "hard_cutoff_voltage": 12.0,
     "recovery_voltage": 13.2,
     "grace_seconds": 90.0,
     "heartbeat_timeout_s": 300.0,
@@ -28,11 +29,30 @@ class TestPiOn:
         assert decide(gl.PI_ON, 11.9) == (gl.SHUTTING_DOWN, gl.ACTION_REQUEST_SHUTDOWN)
 
     def test_at_shutdown_threshold_requests_shutdown(self):
-        # <= shutdown_voltage triggers (boundary inclusive).
-        assert decide(gl.PI_ON, 12.0) == (gl.SHUTTING_DOWN, gl.ACTION_REQUEST_SHUTDOWN)
+        # <= shutdown_voltage (12.5) triggers the graceful request (boundary inclusive).
+        assert decide(gl.PI_ON, 12.5) == (gl.SHUTTING_DOWN, gl.ACTION_REQUEST_SHUTDOWN)
+
+    def test_just_above_shutdown_threshold_stays_on(self):
+        assert decide(gl.PI_ON, 12.6) == (gl.PI_ON, gl.ACTION_NONE)
 
     def test_stale_heartbeat_reboots(self):
         assert decide(gl.PI_ON, 13.4, hb_age=301) == (gl.PI_ON, gl.ACTION_REBOOT)
+
+    def test_stale_heartbeat_no_reboot_when_mqtt_disconnected(self):
+        # Regression (caught live at 13.5 V): the heartbeat comes over MQTT, so a
+        # stale reading while the Pico's own broker link is down means the Pico
+        # is blind, not that the Pi is hung. Rebooting then cycles the broker and
+        # blocks reconnect — a self-sustaining ~5-min reboot loop. Suppress it.
+        assert gl.decide(gl.PI_ON, 13.4, 0.0, 301.0, mqtt_connected=False, **THRESHOLDS) == (
+            gl.PI_ON,
+            gl.ACTION_NONE,
+        )
+
+    def test_stale_heartbeat_reboots_when_mqtt_connected(self):
+        assert gl.decide(gl.PI_ON, 13.4, 0.0, 301.0, mqtt_connected=True, **THRESHOLDS) == (
+            gl.PI_ON,
+            gl.ACTION_REBOOT,
+        )
 
     def test_low_voltage_beats_stale_heartbeat(self):
         # Graceful shutdown is preferred over a watchdog reboot.
@@ -44,13 +64,24 @@ class TestPiOn:
 
 class TestShuttingDown:
     def test_waits_during_grace(self):
-        assert decide(gl.SHUTTING_DOWN, 11.5, secs_in_state=10) == (
+        # Above the hard-cutoff floor, still within grace → keep waiting to halt.
+        assert decide(gl.SHUTTING_DOWN, 12.3, secs_in_state=10) == (
             gl.SHUTTING_DOWN,
             gl.ACTION_NONE,
         )
 
     def test_cuts_power_after_grace(self):
-        assert decide(gl.SHUTTING_DOWN, 11.5, secs_in_state=90) == (gl.PI_OFF, gl.ACTION_CUT_POWER)
+        # Grace elapsed with the Pi never confirming halt → cut (voltage above
+        # the hard floor, so this isolates the grace-timeout path).
+        assert decide(gl.SHUTTING_DOWN, 12.3, secs_in_state=90) == (gl.PI_OFF, gl.ACTION_CUT_POWER)
+
+    def test_hard_cutoff_cuts_before_grace(self):
+        # Battery hit the floor mid-shutdown → cut NOW, don't wait out grace.
+        assert decide(gl.SHUTTING_DOWN, 11.9, secs_in_state=5) == (gl.PI_OFF, gl.ACTION_CUT_POWER)
+
+    def test_at_hard_cutoff_boundary_cuts(self):
+        # <= hard_cutoff_voltage (12.0) is inclusive.
+        assert decide(gl.SHUTTING_DOWN, 12.0, secs_in_state=5) == (gl.PI_OFF, gl.ACTION_CUT_POWER)
 
     def test_completes_shutdown_even_if_voltage_recovers(self):
         # Once committed, don't abort mid-shutdown — the Pi already got the signal.

@@ -38,13 +38,21 @@ def decide(
     heartbeat_age_s: float,
     *,
     shutdown_voltage: float,
+    hard_cutoff_voltage: float,
     recovery_voltage: float,
     grace_seconds: float,
     heartbeat_timeout_s: float,
     halt_confirmed: bool = False,
     halt_settle_seconds: float = 30.0,
+    mqtt_connected: bool = True,
 ) -> "tuple[str, str]":
     """Return ``(new_state, action)`` for the current inputs.
+
+    Low voltage is handled in two stages: at ``shutdown_voltage`` a graceful
+    halt is *requested* (the Pi still has 5V headroom to shut down cleanly); if
+    voltage keeps falling to ``hard_cutoff_voltage`` the relay is forced open
+    regardless of halt state, to stop deep-discharging the battery. Both sit
+    below the gateway software's CRITICAL level so Home Assistant halts first.
 
     ``heartbeat_age_s`` is seconds since the last Pi heartbeat; pass a small
     value (e.g. just after a reboot) to indicate a healthy, recently-heard Pi.
@@ -62,21 +70,40 @@ def decide(
 
     ``halt_settle_seconds`` bounds how long ``halt_confirmed`` may hold the gate
     off in ``PI_OFF`` — see that branch below.
+
+    ``mqtt_connected`` gates the stale-heartbeat reboot: the heartbeat arrives
+    over MQTT, so a stale reading is only meaningful (Pi actually hung) when the
+    Pico's own broker link is up. Pass False and the reboot is suppressed.
     """
     if halt_confirmed and state == SHUTTING_DOWN:
         return PI_OFF, ACTION_CUT_POWER
 
     if state == PI_ON:
-        # Low battery wins over the watchdog — always prefer a graceful halt.
+        # Low battery wins over the watchdog — request a graceful halt while the
+        # Pi still has 5V headroom. The hard-cutoff floor is enforced in
+        # SHUTTING_DOWN below (and reached within a tick or two if voltage is
+        # already crashing).
         if voltage_v <= shutdown_voltage:
             return SHUTTING_DOWN, ACTION_REQUEST_SHUTDOWN
-        if heartbeat_age_s > heartbeat_timeout_s:
-            # Hung Pi: power-cycle it. Stay in PI_ON; the hardware layer resets
-            # the heartbeat clock after the pulse so we don't re-trigger.
+        if mqtt_connected and heartbeat_age_s > heartbeat_timeout_s:
+            # Hung Pi: power-cycle it — but ONLY while our own MQTT link is up.
+            # The heartbeat arrives over MQTT, so a stale heartbeat while we're
+            # disconnected means the *Pico* is blind (its broker connection
+            # dropped), not that the Pi is hung. Rebooting then power-cycles the
+            # broker too and stops the Pico ever reconnecting: a self-sustaining
+            # ~5-min reboot loop, seen live on the bench at a healthy 13.5 V.
+            # Stay PI_ON; the hardware layer resets the heartbeat clock after
+            # the pulse so we don't immediately re-trigger.
             return PI_ON, ACTION_REBOOT
         return PI_ON, ACTION_NONE
 
     if state == SHUTTING_DOWN:
+        # Battery critical — cut now rather than waiting out the grace period; a
+        # slightly-less-graceful halt beats deep-discharging the pack. (A
+        # completed halt is caught by the halt_confirmed rule at the top; the
+        # grace timeout is the fallback for a Pi that never halts.)
+        if voltage_v <= hard_cutoff_voltage:
+            return PI_OFF, ACTION_CUT_POWER
         if seconds_in_state >= grace_seconds:
             return PI_OFF, ACTION_CUT_POWER
         return SHUTTING_DOWN, ACTION_NONE
