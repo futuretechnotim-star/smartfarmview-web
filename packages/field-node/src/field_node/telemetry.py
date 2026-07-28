@@ -56,6 +56,14 @@ class TelemetryPublisher:
         self._connected = False
 
     def connect(self) -> None:
+        # paho's loop_start auto-reconnects MQTT, and field-node.service is
+        # Restart=always for process crashes — but neither recovers a wedged
+        # OS-level WiFi link or an unrecoverable network outage on a remote node.
+        # TODO(field-reliability): add a connectivity watchdog that reboots the
+        # Pi if the broker is unreachable for N minutes (Linux analogue of the
+        # Pico's NET_RECOVERY_TIMEOUT_S machine.reset), and verify wpa_supplicant
+        # re-associates after an AP drop / on a marginal link. See
+        # docs/watchdog-bench-test.md "Findings — 2026-07-28".
         self._client.connect_async(settings.mqtt_host, settings.mqtt_port, keepalive=60)
         self._client.loop_start()
 

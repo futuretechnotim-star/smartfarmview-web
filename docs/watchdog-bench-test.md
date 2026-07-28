@@ -124,3 +124,40 @@ Two options, in order of preference:
 - [ ] If thresholds need adjusting based on findings, update
       `firmware/config.py` and this doc's threshold table together, and
       re-run the affected portion of the sweep to confirm
+
+## Findings — 2026-07-28 bench session
+
+**WiFi/MQTT clients must self-heal after an AP drop (field-reliability blocker).**
+Repeatedly power-cycling the gateway during the sweep took down its WiFi AP
+(`hostapd` on the Pi), and neither the Pico nor a far field node re-associated
+on their own — both needed a *physical* power-cycle to come back. In the field
+the AP drops on **every** low-voltage cut / OTA / gateway reboot, with nobody to
+reset a remote node, so unattended recovery is mandatory. Root cause: a bare
+`connect()`/reconnect retry can't clear a wedged radio (`wlan.isconnected()` can
+even sit stale-`True` on a dead link), and there was no watchdog to reboot after
+a long offline stretch.
+
+- **Pico — fixed** (commit `c9fa454`): `_connect_wifi` now does a full radio
+  bounce (`disconnect` → `active(False)` → `active(True)` → `connect`) before
+  every attempt, plus a connectivity watchdog — `PI_ON` with no MQTT for
+  `NET_RECOVERY_TIMEOUT_S` (900 s) → `machine.reset()` (safe: the NC relay keeps
+  the Pi powered across the reset). Radio-bounce path is boot-validated;
+  recovery-from-actual-AP-drop still wants a `hostapd`-restart bench test.
+- **TODO — field node (`packages/field-node`):** add the equivalent self-heal.
+  It's a Pi Zero (Linux): WiFi is `wpa_supplicant`'s job, MQTT reconnect is
+  handled by paho `loop_start`, and `field-node.service` has `Restart=always`
+  for process crashes — but there's **no network-connectivity watchdog**. Add
+  one that reboots the Pi if it can't reach the broker for N minutes (the Linux
+  analogue of the Pico's `machine.reset()`), and confirm `wpa_supplicant`
+  reliably re-associates after an AP drop / on a marginal link. Without it, a
+  wedged-WiFi field node stays dark until someone drives out to power-cycle it.
+
+**Threshold calibration:** the Pico's INA3221 reads ~0.02–0.05 V *below* the PSU
+set point (graceful request fired at a 12.55 V PSU setting / 12.50 V logged).
+Small, but account for it when reasoning about exact trip points — it's a
+calibration offset, not a logic issue.
+
+**Two-stage low-voltage cutoff validated:** the graceful request at 12.5 V gave
+the Pi clean 5 V headroom to complete its ~25 s halt (heartbeat healthy at the
+request), versus browning out ~55 s before the cut at the old single 12.0 V
+threshold. The 12.0 V hard-cut is the backstop for a Pi that won't halt.
