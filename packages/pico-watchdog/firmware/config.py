@@ -73,6 +73,10 @@ ADC_REF_VOLTAGE = 3.3
 
 # --- MQTT topics ------------------------------------------------------------
 TELEMETRY_TOPIC = b"securitymesh/gateway/pico/telemetry"
+# Retained tail of watchdog.log, republished on every MQTT (re)connect so the
+# events logged while the broker was down (cuts/reboots) reach HA without USB.
+LOG_TOPIC = b"securitymesh/gateway/pico/log"
+LOG_TAIL_LINES = 40
 HEARTBEAT_TOPIC = b"securitymesh/gateway/pi/heartbeat"
 COMMAND_TOPIC = b"securitymesh/gateway/pico/cmd"
 GATEWAY_CMD_TOPIC = b"securitymesh/sfv-gateway/cmd"  # gateway_node's own command topic

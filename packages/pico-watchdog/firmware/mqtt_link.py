@@ -81,12 +81,12 @@ class MQTTLink:
         except Exception:  # noqa: BLE001
             self._connected = False
 
-    def publish(self, topic: bytes, payload: dict) -> None:
+    def publish(self, topic: bytes, payload: dict, retain: bool = False) -> None:
         """Publish an arbitrary JSON payload to an arbitrary topic — e.g. a
-        command to the gateway's own command topic."""
+        command to the gateway's own command topic, or the retained log tail."""
         if not self._connected:
             return
         try:
-            self._client.publish(topic, json.dumps(payload))
+            self._client.publish(topic, json.dumps(payload), retain=retain)
         except Exception:  # noqa: BLE001
             self._connected = False

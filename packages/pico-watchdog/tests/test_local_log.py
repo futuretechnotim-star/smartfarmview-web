@@ -50,3 +50,33 @@ def test_missing_file_does_not_raise_on_append(tmp_path):
     # Parent dir doesn't exist — append() must swallow the OSError, not crash
     # the caller's safety loop.
     log.append("should not raise")
+
+
+def test_tail_returns_most_recent_lines(tmp_path):
+    log = RollingLog(str(tmp_path / "watchdog.log"), max_bytes=1024)
+    for i in range(5):
+        log.append(f"line-{i}")
+    tail = log.tail(2)
+    lines = [ln for ln in tail.split("\n") if ln]
+    assert len(lines) == 2
+    assert lines[0].endswith("line-3")
+    assert lines[1].endswith("line-4")  # newest last
+
+
+def test_tail_spans_backup_when_active_is_short(tmp_path):
+    path = str(tmp_path / "watchdog.log")
+    log = RollingLog(path, max_bytes=60)  # small → forces rotation
+    for i in range(12):
+        log.append(f"entry-{i:02d}")
+    assert (tmp_path / "watchdog.log.1").exists()  # rotated at least once
+    with open(path) as f:
+        active_line_count = len(f.readlines())
+    tail = log.tail(active_line_count + 3)  # ask for more than the active file holds
+    lines = [ln for ln in tail.split("\n") if ln]
+    assert any(ln.endswith("entry-11") for ln in lines)  # newest present
+    assert len(lines) > active_line_count  # reached back into the .1 backup
+
+
+def test_tail_empty_when_no_log(tmp_path):
+    log = RollingLog(str(tmp_path / "nope.log"), max_bytes=1024)
+    assert log.tail(10) == ""

@@ -55,3 +55,21 @@ class RollingLog:
                 f.write(line)
         except OSError:
             pass
+
+    def _read_lines(self, path: str) -> list:
+        try:
+            with open(path) as f:
+                return f.readlines()
+        except OSError:
+            return []
+
+    def tail(self, max_lines: int) -> str:
+        """Most recent ``max_lines`` log lines (oldest-first) across the active
+        file and its rotated ``.1`` backup, as one string. Best-effort ('' on
+        error). Used to forward the log over MQTT on reconnect so the events
+        logged while offline (cuts/reboots) reach the broker once it's back —
+        the backup is read only when the active file alone is too short."""
+        lines = self._read_lines(self._path)
+        if len(lines) < max_lines:
+            lines = self._read_lines(self._backup_path) + lines
+        return "".join(lines[-max_lines:])

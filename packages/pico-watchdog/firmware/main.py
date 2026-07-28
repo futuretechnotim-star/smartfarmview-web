@@ -208,6 +208,7 @@ def main() -> None:
     state_since = time.time()
     last_telemetry = 0.0
     fan_on = fan_logic.FAN_OFF
+    mqtt_was_connected = False
 
     while True:
         now = time.time()
@@ -228,6 +229,12 @@ def main() -> None:
             last_mqtt_reconnect_attempt = now
 
         link.poll()
+
+        # Forward the log tail whenever MQTT (re)connects, so events logged
+        # while the broker was down (cuts/reboots) reach HA without a USB cable.
+        if link.is_connected() and not mqtt_was_connected:
+            link.publish(config.LOG_TOPIC, {"log": log.tail(config.LOG_TAIL_LINES)}, retain=True)
+        mqtt_was_connected = link.is_connected()
 
         ota_base_url = link.pop_pending_ota()
         if ota_base_url is not None:

@@ -110,6 +110,57 @@ tier; the gate's hard thresholds work on raw voltage. Re-tune both the threshold
 and the [`soc.py`](../packages/pico-watchdog/firmware/soc.py) curve after the
 field soak.
 
+## MQTT topics & remote log access
+
+| Topic | Dir | Payload |
+|---|---|---|
+| `securitymesh/gateway/pico/telemetry` | pub, 30 s | JSON snapshot: `voltage_v`, `load_voltage_v`, `solar_voltage_v`, `soc_pct`, `gate_state`, `last_action`, `halt_confirmed`, `heartbeat_age_s`, `enclosure_temp_c`, `fan_on` |
+| `securitymesh/gateway/pi/heartbeat` | sub | the Pi's heartbeat the watchdog monitors |
+| `securitymesh/gateway/pico/log` | pub, **retained** | `{"log": "<last LOG_TAIL_LINES of watchdog.log>"}` |
+
+**`…/pico/log` — remote access to the flash event log.** The event log
+([`local_log.py`](../packages/pico-watchdog/firmware/local_log.py)) lives on the
+Pico's flash and is otherwise only readable over USB. On **every MQTT
+(re)connect** the Pico republishes its tail (active file + `.1` backup) to this
+**retained** topic, so the `action=`/`boot` lines written *while the broker was
+down* (cuts, reboots) reach the broker once the Pico is back online — no USB
+cable. Retained ⇒ a subscriber gets the latest tail immediately, any time.
+Cadence note: it refreshes **on reconnect**, not continuously — it's for "what
+happened while it was offline," not live tailing (use `…/telemetry` for live).
+
+### Subscribing in Home Assistant
+
+**Ad-hoc:** Settings → Devices & Services → **MQTT** → **Configure** →
+**"Listen to a topic"** → `securitymesh/gateway/pico/log` → Start. The retained
+tail shows immediately.
+
+**Persistent sensor + card.** The tail is multi-KB — over HA's 255-char *state*
+limit — so it must live in an *attribute*, not the state:
+
+```yaml
+mqtt:
+  sensor:
+    - name: "Pico Watchdog Log"
+      unique_id: pico_watchdog_log
+      state_topic: "securitymesh/gateway/pico/log"
+      value_template: "{{ value_json.log.strip().split('\n') | last | truncate(250, True) }}"
+      json_attributes_topic: "securitymesh/gateway/pico/log"   # full tail → 'log' attribute
+      icon: mdi:file-document-outline
+```
+
+```yaml
+# dashboard card
+type: markdown
+content: |
+  ## Pico Watchdog Log
+  ```
+  {{ state_attr('sensor.pico_watchdog_log', 'log') }}
+  ```
+```
+
+State = the most recent log line (glanceable); the full tail is the `log`
+attribute (Developer Tools → States, or the card above).
+
 ## Connectivity caveat (Tailscale)
 
 There is **no native Tailscale client for the RP2350/Pico**. Therefore:
