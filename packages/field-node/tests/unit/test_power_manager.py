@@ -227,7 +227,7 @@ class TestPeriodicCapture:
         ):
             pm = PowerManager()
             pm.update(100)
-        assert pm.periodic_capture_interval_s is None
+            assert pm.periodic_capture_interval_s is None
 
     def test_periodic_interval_none_in_low_daytime(self) -> None:
         with (
@@ -236,7 +236,7 @@ class TestPeriodicCapture:
         ):
             pm = PowerManager()
             pm._mode = PowerMode.LOW  # type: ignore[attr-defined]
-        assert pm.periodic_capture_interval_s is None
+            assert pm.periodic_capture_interval_s is None
 
     def test_periodic_interval_set_in_critical_daytime(self) -> None:
         with (
@@ -245,8 +245,8 @@ class TestPeriodicCapture:
         ):
             pm = PowerManager()
             pm._mode = PowerMode.CRITICAL  # type: ignore[attr-defined]
-        assert pm.periodic_capture_interval_s is not None
-        assert pm.periodic_capture_interval_s > 0
+            assert pm.periodic_capture_interval_s is not None
+            assert pm.periodic_capture_interval_s > 0
 
     def test_periodic_interval_none_in_critical_nighttime(self) -> None:
         """No periodic captures at night — camera is useless in the dark."""
@@ -267,4 +267,4 @@ class TestPeriodicCapture:
         ):
             pm = PowerManager()
             pm._mode = PowerMode.CRITICAL  # type: ignore[attr-defined]
-        assert pm.periodic_capture_interval_s == settings.critical_capture_interval_s
+            assert pm.periodic_capture_interval_s == settings.critical_capture_interval_s
