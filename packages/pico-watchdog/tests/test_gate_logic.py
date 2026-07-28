@@ -79,15 +79,20 @@ def test_unknown_state_fails_safe_on():
 class TestHaltConfirmed:
     """gpio-poweroff signal: the Pi's OS halt has actually completed."""
 
-    def test_cuts_power_immediately_from_pi_on(self):
-        # Healthy voltage, no shutdown ever requested — still cut if the Pi
-        # genuinely halted (e.g. a manual `sudo shutdown` bypassing the gate).
+    def test_does_not_cut_running_pi_on_halt_confirmed(self):
+        # Regression (caught live): a high halt_confirmed while PI_ON must NOT
+        # cut a healthy, running Pi. On the field hardware GP18 latched high
+        # after a shutdown because a back-power path kept the halted Pi alive;
+        # honoring it in PI_ON would kill a Pi that's actually up. A genuine
+        # unrequested halt is still caught by the stale-heartbeat reboot.
         assert gl.decide(gl.PI_ON, 13.4, 0.0, 0.0, halt_confirmed=True, **THRESHOLDS) == (
-            gl.PI_OFF,
-            gl.ACTION_CUT_POWER,
+            gl.PI_ON,
+            gl.ACTION_NONE,
         )
 
     def test_cuts_power_immediately_from_shutting_down_without_waiting_grace(self):
+        # We DID request the shutdown, so trust the completion signal and cut
+        # early instead of waiting out the full grace period.
         assert gl.decide(gl.SHUTTING_DOWN, 11.5, 1.0, 0.0, halt_confirmed=True, **THRESHOLDS) == (
             gl.PI_OFF,
             gl.ACTION_CUT_POWER,
@@ -103,18 +108,27 @@ class TestHaltConfirmed:
             gl.ACTION_NONE,
         )
 
-    def test_no_restore_while_halt_confirmed_even_with_healthy_voltage(self):
-        # Regression: caught live on hardware as a cut/restore/cut oscillation.
-        # Healthy voltage alone must not restore power while halt_confirmed is
-        # still asserted — on real hardware that means the Pi hasn't actually
-        # lost power yet (a truly de-energized Pi lets this float back low
-        # through the Pico's pull-down), and the whole point of the software
-        # CRITICAL path is to react before voltage actually drops, so reading
-        # "healthy" the instant we cut is the expected case, not a bug.
-        assert gl.decide(gl.PI_OFF, 13.4, 0.0, 0.0, halt_confirmed=True, **THRESHOLDS) == (
-            gl.PI_OFF,
-            gl.ACTION_NONE,
-        )
+    def test_holds_off_during_settle_window_while_halt_confirmed(self):
+        # Within the settle window, an asserted halt line still blocks restore
+        # even at healthy voltage — don't re-power before the rail has dropped.
+        assert gl.decide(
+            gl.PI_OFF, 13.4, 5.0, 0.0, halt_confirmed=True, halt_settle_seconds=30.0, **THRESHOLDS
+        ) == (gl.PI_OFF, gl.ACTION_NONE)
+
+    def test_restores_after_settle_window_if_halt_confirmed_stuck(self):
+        # The deadlock fix: past the settle window a still-asserted halt line is
+        # treated as stuck (Pi kept alive by a back-power path) and must not
+        # wedge the gateway off forever — voltage governs, so restore.
+        assert gl.decide(
+            gl.PI_OFF, 13.4, 40.0, 0.0, halt_confirmed=True, halt_settle_seconds=30.0, **THRESHOLDS
+        ) == (gl.PI_ON, gl.ACTION_RESTORE_POWER)
+
+    def test_stays_off_after_settle_if_voltage_below_recovery(self):
+        # Even past the settle window, a genuinely low battery keeps it off —
+        # recovery_voltage is the real guard.
+        assert gl.decide(
+            gl.PI_OFF, 13.0, 40.0, 0.0, halt_confirmed=True, halt_settle_seconds=30.0, **THRESHOLDS
+        ) == (gl.PI_OFF, gl.ACTION_NONE)
 
     def test_restores_once_halt_confirmed_clears(self):
         assert gl.decide(gl.PI_OFF, 13.4, 0.0, 0.0, halt_confirmed=False, **THRESHOLDS) == (

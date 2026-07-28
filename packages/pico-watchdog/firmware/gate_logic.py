@@ -42,6 +42,7 @@ def decide(
     grace_seconds: float,
     heartbeat_timeout_s: float,
     halt_confirmed: bool = False,
+    halt_settle_seconds: float = 30.0,
 ) -> "tuple[str, str]":
     """Return ``(new_state, action)`` for the current inputs.
 
@@ -49,13 +50,20 @@ def decide(
     value (e.g. just after a reboot) to indicate a healthy, recently-heard Pi.
 
     ``halt_confirmed`` reflects the gpio-poweroff signal from the Pi (driven
-    only once its OS halt has actually completed, not merely requested) — it
-    lets the gate cut power immediately instead of waiting out the full
-    ``grace_seconds`` guess, without weakening the guess-based fallback: if the
-    wire is absent/disconnected the caller must pass False (safe default), so
-    a stuck-on Pi still gets cut after ``grace_seconds`` as before.
+    only once its OS halt has actually completed). It confirms a shutdown we
+    already requested so we can cut immediately instead of waiting out the full
+    ``grace_seconds`` guess — but it is honored ONLY while ``SHUTTING_DOWN``.
+    A high ``halt_confirmed`` while the Pi is meant to be running is treated as
+    spurious (a boot-time transient on gpio-poweroff, electrical noise, or a pin
+    held high because a back-power path kept the halted Pi alive) and never cuts
+    a healthy Pi; a genuine unrequested halt is still caught by the stale-
+    heartbeat reboot. If the wire is absent/disconnected the caller must pass
+    False (safe default).
+
+    ``halt_settle_seconds`` bounds how long ``halt_confirmed`` may hold the gate
+    off in ``PI_OFF`` — see that branch below.
     """
-    if halt_confirmed and state in (PI_ON, SHUTTING_DOWN):
+    if halt_confirmed and state == SHUTTING_DOWN:
         return PI_OFF, ACTION_CUT_POWER
 
     if state == PI_ON:
@@ -74,16 +82,19 @@ def decide(
         return SHUTTING_DOWN, ACTION_NONE
 
     if state == PI_OFF:
-        # While halt_confirmed is still asserted, the Pi's GPIO is still being
-        # actively driven — which on real hardware means it hasn't actually
-        # lost power yet (a truly de-energized Pi lets this float back low
-        # through the Pico's pull-down). Restoring power on voltage alone here
-        # would fight the very cutoff we just honored: the whole reason
-        # shutdown_voltage sits below the software CRITICAL threshold is so a
-        # graceful halt can happen *before* voltage actually gets low, so
-        # voltage reading "recovered" the instant we cut is expected, not a
-        # signal to reboot immediately.
-        if halt_confirmed:
+        # A truly de-energized Pi releases gpio-poweroff within a second or two
+        # (the line floats back low through the Pico's pull-down), so honor
+        # halt_confirmed only during a short settle window right after the cut.
+        # That window still avoids re-powering before the rail actually drops —
+        # the reason the original code blocked on halt_confirmed at all — but it
+        # is BOUNDED: a pin stuck high (the Pi kept alive by a back-power path
+        # the relay never breaks) must not wedge the gateway off forever, which
+        # is exactly the deadlock seen in the field. After the window, voltage
+        # governs; recovery_voltage (well above shutdown_voltage) is the real
+        # guard against re-powering a genuinely low battery. Restoring while the
+        # pin is still high is safe now that PI_ON no longer cuts on it, so this
+        # can't re-open the old cut/restore/cut oscillation.
+        if halt_confirmed and seconds_in_state < halt_settle_seconds:
             return PI_OFF, ACTION_NONE
         if voltage_v >= recovery_voltage:
             return PI_ON, ACTION_RESTORE_POWER

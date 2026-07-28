@@ -260,6 +260,7 @@ def main() -> None:
             grace_seconds=config.GRACE_SECONDS,
             heartbeat_timeout_s=config.HEARTBEAT_TIMEOUT_S,
             halt_confirmed=bool(halt_confirmed_pin.value()),
+            halt_settle_seconds=config.HALT_SETTLE_SECONDS,
         )
 
         if action != gate_logic.ACTION_NONE:

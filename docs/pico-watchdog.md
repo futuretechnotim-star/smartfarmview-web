@@ -16,7 +16,9 @@ can keep the Pi off through a recharge and re-power it when voltage recovers.
 1. **Battery/solar telemetry** — poll the ECO-WORTHY PWM controller over RS485
    Modbus (ADC fallback for voltage if RS485 fails).
 2. **Low-voltage graceful shutdown** — assert `SHUTDOWN_REQ`, wait the grace
-   period for the Pi to halt, then cut the 5V buck enable.
+   period (or until `HALT_CONFIRMED`) for the Pi to halt, then cut power via the
+   PSU relay (GP16). GP15 `PIN_PI_POWER_EN` gates a 5V buck ENABLE on builds that
+   have one; the field gateway is **relay-only**, so GP15 is unused there.
 3. **Wake-on-recharge** — keep the Pi off until voltage clears the (higher)
    recovery threshold, then restore power. Hysteresis prevents dawn boot-loops.
 4. **Hardware watchdog** — power-cycle the Pi if its MQTT heartbeat goes stale.
@@ -32,6 +34,18 @@ PI_ON ──(V ≤ shutdown_voltage)──► SHUTTING_DOWN ──(grace elapsed
 PI_ON ──(heartbeat stale)──► power-cycle, stay PI_ON
 ```
 
+`halt_confirmed` (GP18, from the Pi's `gpio-poweroff`) lets the gate cut as soon
+as the OS halt completes instead of waiting out the grace guess — but it is
+honored **only while `SHUTTING_DOWN`** (a shutdown we asked for). A high GP18
+while `PI_ON` is treated as spurious — a boot transient, electrical noise, or a
+pin held high because a back-power path kept a halted Pi alive — and **never cuts
+a running Pi**; a genuine unrequested halt is caught by the heartbeat watchdog
+instead. In `PI_OFF`, GP18 is honored only for `HALT_SETTLE_SECONDS` (30 s) after
+the cut: long enough not to re-power before the rail drops, but **bounded** so a
+*stuck-high* pin can't wedge the gateway off forever — a deadlock caught live on
+the bench, where a halted-but-still-powered Pi held GP18 high and blocked
+recovery even at healthy voltage.
+
 ## Pin map (see `firmware/config.py`)
 
 | Pico pin | To | Purpose |
@@ -39,9 +53,14 @@ PI_ON ──(heartbeat stale)──► power-cycle, stay PI_ON
 | GP15 `PIN_PI_POWER_EN` | 5V buck ENABLE / high-side load switch | gate the Pi's power |
 | GP16 `PIN_PSU_RELAY` | gateway PSU relay IN | second, more robust cutoff, wired through the relay's **NC** contact (COM ← solar charge controller load(+), NC → PSU(+)) so a Pico reboot fails safe to *powered*, not cut |
 | GP14 `PIN_SHUTDOWN_REQ` | Pi GPIO input | "please halt now" |
+| GP18 `PIN_HALT_CONFIRMED` | Pi **GPIO27** (`gpio-poweroff`) → GP18, input w/ internal pull-down | "halt complete" — cut early instead of guessing the grace period (see state machine above) |
 | GP4/GP5 `PIN_I2C_SDA/SCL` | I2C0 bus: INA3221 (`0x40`) + BME280 (`0x77`) | battery voltage + enclosure temp |
 | GP26/ADC0 `PIN_BATTERY_ADC` | divided battery voltage | backup if I2C fails |
 | GP17 `PIN_FAN_RELAY` | enclosure fan relay IN | thermostat-controlled fan |
+
+Note: on the **relay-only** field build, GP15's 5V-buck ENABLE has no target (the
+PSU has no enable line) — power is cut solely by the GP16 relay, and GP15 is left
+unconnected.
 
 Note: GP4/GP5 were originally slated for RS485 (Modbus) to the charge controller;
 the shipped firmware reads voltage over I2C instead (`ina3221.py`), so those pins

@@ -14,6 +14,11 @@ SHUTDOWN_VOLTAGE = 12.0  # ~low SoC under light load → request shutdown then c
 RECOVERY_VOLTAGE = 13.2  # charging well underway → safe to re-power the Pi
 GRACE_SECONDS = 90  # max time to wait for the Pi to halt after SHUTDOWN_REQ
 HEARTBEAT_TIMEOUT_S = 300  # no Pi heartbeat for this long (while ON) → reboot
+# How long an asserted halt_confirmed may hold the gate in PI_OFF before voltage
+# takes over. A de-energized Pi drops gpio-poweroff in ~1-2s; anything longer
+# means the pin is stuck high (e.g. a back-power path the relay doesn't break),
+# and must not wedge the gateway off forever. See gate_logic.decide (PI_OFF).
+HALT_SETTLE_SECONDS = 30
 
 # --- GPIO pin map (BCM/GP numbering on the Pico) ----------------------------
 PIN_PI_POWER_EN = 15  # drives the 5V buck ENABLE / high-side load switch
