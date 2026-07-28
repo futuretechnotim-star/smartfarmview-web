@@ -21,16 +21,18 @@ and [`docs/pico-watchdog.md`](../../docs/pico-watchdog.md).
     the Pi 5 cannot wake itself after a deep-battery shutdown.*
   - **Hardware watchdog:** power-cycle the Pi if its MQTT heartbeat goes stale.
 - Runs the [`fan_logic`](firmware/fan_logic.py) thermostat: reads enclosure
-  temperature from a BME280 (sharing the same I2C0 bus) and drives the fan relay
-  (`PIN_FAN_RELAY`) with hysteresis.
+  temperature and humidity from a BME280 (sharing the same I2C0 bus) and drives
+  the fan relay (`PIN_FAN_RELAY`) from the temperature reading with hysteresis.
 - Publishes telemetry (`soc_pct`, `voltage_v`, gate state, `enclosure_temp_c`,
-  `fan_on`) to MQTT for the gateway power brain and Home Assistant.
+  `enclosure_humidity_pct`, `fan_on`) to MQTT for the gateway power brain and
+  Home Assistant (registered there as Cabinet Temp, Cabinet Humidity, Cabinet Fan).
 
 The safety loop **never depends on WiFi/MQTT**. Connectivity is for telemetry
 only, brokered through the gateway Pi (the Pico can't join Tailscale directly).
-[`ota.py`](firmware/ota.py) sketches a future over-the-air update path but isn't
-wired up yet — no command dispatch calls it, and there's no file server on the
-gateway serving firmware files. Flashing today is physical (`mpremote`, below).
+[`ota.py`](firmware/ota.py) supports remote over-the-air updates, triggered via
+an MQTT command (`{"cmd": "ota", "base_url": "..."}`) and served from
+`/opt/pico-fw` on the gateway (`scripts/pico-fw-server.service`). Flashing from
+scratch is still physical (`mpremote`, below).
 
 ## Layout
 

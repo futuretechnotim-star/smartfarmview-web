@@ -113,6 +113,15 @@ def _read_temperature(bme: "BME280 | None") -> "float | None":
         return None
 
 
+def _read_humidity(bme: "BME280 | None") -> "float | None":
+    if bme is None:
+        return None
+    try:
+        return bme.humidity()
+    except Exception:
+        return None
+
+
 def _prepare_and_apply_ota(link: MQTTLink, halt_confirmed_pin: Pin, base_url: str) -> None:
     """Stage the update (needs the gateway's own network/AP, so this runs
     first, before anything is asked to halt), then ask the gateway to
@@ -273,6 +282,7 @@ def main() -> None:
         load_voltage_v = _read_ina_channel(ina, config.INA3221_CH_LOAD_5V)
         solar_voltage_v = _read_ina_channel(ina, config.INA3221_CH_SOLAR)
         enclosure_temp_c = _read_temperature(bme)
+        enclosure_humidity_pct = _read_humidity(bme)
 
         if enclosure_temp_c is not None:
             fan_on = fan_logic.decide(
@@ -351,6 +361,11 @@ def main() -> None:
                     "heartbeat_age_s": round(link.heartbeat_age_s(), 1),
                     "enclosure_temp_c": (
                         round(enclosure_temp_c, 1) if enclosure_temp_c is not None else None
+                    ),
+                    "enclosure_humidity_pct": (
+                        round(enclosure_humidity_pct, 1)
+                        if enclosure_humidity_pct is not None
+                        else None
                     ),
                     "fan_on": fan_on,
                 }

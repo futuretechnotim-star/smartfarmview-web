@@ -72,10 +72,13 @@ heartbeat the Pico watches.
 
 ## Enclosure fan thermostat
 
-The Pico also reads the enclosure's BME280 temperature (same part as the
-gateway's SparkFun Environmental Combo Breakout, reimplemented for MicroPython
-in [`bme280.py`](../packages/pico-watchdog/firmware/bme280.py) — temperature
-only, no CircuitPython/Blinka dependency) and drives a fan relay from it.
+The Pico also reads the enclosure's BME280 temperature and humidity (same part
+as the gateway's SparkFun Environmental Combo Breakout, reimplemented for
+MicroPython in [`bme280.py`](../packages/pico-watchdog/firmware/bme280.py) —
+no CircuitPython/Blinka dependency; pressure is left uncompensated since
+nothing here needs it) and drives a fan relay from the temperature reading.
+Both readings and the fan state are published to MQTT and registered in Home
+Assistant as **Cabinet Temp**, **Cabinet Humidity**, and **Cabinet Fan**.
 
 [`fan_logic.py`](../packages/pico-watchdog/firmware/fan_logic.py) is a second
 pure, unit-tested state machine (same shape as `gate_logic.py`): simple
@@ -114,7 +117,7 @@ field soak.
 
 | Topic | Dir | Payload |
 |---|---|---|
-| `securitymesh/gateway/pico/telemetry` | pub, 30 s | JSON snapshot: `voltage_v`, `load_voltage_v`, `solar_voltage_v`, `soc_pct`, `gate_state`, `last_action`, `halt_confirmed`, `heartbeat_age_s`, `enclosure_temp_c`, `fan_on` |
+| `securitymesh/gateway/pico/telemetry` | pub, 30 s | JSON snapshot: `voltage_v`, `load_voltage_v`, `solar_voltage_v`, `soc_pct`, `gate_state`, `last_action`, `halt_confirmed`, `heartbeat_age_s`, `enclosure_temp_c`, `enclosure_humidity_pct`, `fan_on` |
 | `securitymesh/gateway/pi/heartbeat` | sub | the Pi's heartbeat the watchdog monitors |
 | `securitymesh/gateway/pico/log` | pub, **retained** | `{"log": "<last LOG_TAIL_LINES of watchdog.log>"}` |
 

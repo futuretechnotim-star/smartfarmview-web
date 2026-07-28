@@ -160,6 +160,48 @@ def _publish_gateway_discovery(client: mqtt.Client) -> None:
                 "device": device,
             },
         ),
+        (
+            "sensor",
+            "cabinet_temp",
+            {
+                "name": "Cabinet Temp",
+                "unique_id": f"{node}_cabinet_temp",
+                "state_topic": pico_topic,
+                "value_template": "{{ value_json.enclosure_temp_c }}",
+                "unit_of_measurement": "°C",
+                "device_class": "temperature",
+                "state_class": "measurement",
+                "device": device,
+            },
+        ),
+        (
+            "sensor",
+            "cabinet_humidity",
+            {
+                "name": "Cabinet Humidity",
+                "unique_id": f"{node}_cabinet_humidity",
+                "state_topic": pico_topic,
+                "value_template": "{{ value_json.enclosure_humidity_pct }}",
+                "unit_of_measurement": "%",
+                "device_class": "humidity",
+                "state_class": "measurement",
+                "device": device,
+            },
+        ),
+        (
+            "binary_sensor",
+            "cabinet_fan",
+            {
+                "name": "Cabinet Fan",
+                "unique_id": f"{node}_cabinet_fan",
+                "state_topic": pico_topic,
+                "value_template": "{{ 'ON' if value_json.fan_on else 'OFF' }}",
+                "payload_on": "ON",
+                "payload_off": "OFF",
+                "device_class": "running",
+                "device": device,
+            },
+        ),
         # ── Field node fleet ─────────────────────────────────────────────────
         (
             "sensor",
