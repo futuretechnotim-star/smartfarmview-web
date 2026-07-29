@@ -122,7 +122,13 @@ def _read_humidity(bme: "BME280 | None") -> "float | None":
         return None
 
 
-def _prepare_and_apply_ota(link: MQTTLink, halt_confirmed_pin: Pin, base_url: str) -> None:
+def _prepare_and_apply_ota(
+    link: MQTTLink,
+    halt_confirmed_pin: Pin,
+    power_en: Pin,
+    psu_relay: Pin,
+    base_url: str,
+) -> None:
     """Stage the update (needs the gateway's own network/AP, so this runs
     first, before anything is asked to halt), then ask the gateway to
     gracefully halt and wait for confirmation before activating.
@@ -134,6 +140,18 @@ def _prepare_and_apply_ota(link: MQTTLink, halt_confirmed_pin: Pin, base_url: st
     the time the gateway has actually halted, its AP is down too, so the file
     server a single-step apply would still be trying to reach is already
     unreachable.
+
+    ``{"cmd": "prepare_shutdown"}`` below causes the gateway to actually halt
+    unconditionally, the moment it's received — independent of whatever this
+    function decides afterwards. So every exit from here past that point
+    (PROCEED, ABORT, or an activate_staged() failure) must recover it: the
+    PSU relay's NC wiring keeps the Pi powered straight *through* an OS halt
+    with no self-wake, and the stale-heartbeat watchdog can't do it either
+    (deliberately suppressed whenever our own MQTT link is down — see
+    gate_logic.decide — which it always is right after this, since the
+    broker runs on the same Pi). Found live: an OTA that aborted on
+    halt_confirmed never tripping left the gateway halted with nothing
+    watching for over 8 minutes, until it was power-cycled by hand.
     """
     link.publish_telemetry({"ota_status": "staging"})
     stage_error = ota.stage_update(base_url)
@@ -165,12 +183,18 @@ def _prepare_and_apply_ota(link: MQTTLink, halt_confirmed_pin: Pin, base_url: st
             break
         if outcome == ota_prep.ABORT:
             link.publish_telemetry({"ota_status": "aborted_gateway_did_not_halt"})
+            _pulse_psu_power(power_en, psu_relay)
             return
 
         link.publish_telemetry(
             {"ota_status": "waiting_for_gateway_halt", "elapsed_s": round(elapsed, 1)}
         )
         time.sleep(config.LOOP_INTERVAL_S)
+
+    # Recover the gateway now, unconditionally, before activate_staged() gets
+    # a chance to fail or reset — see the docstring above for why nothing
+    # else will do this.
+    _pulse_psu_power(power_en, psu_relay)
 
     link.publish_telemetry({"ota_status": "activating"})
     error = ota.activate_staged()  # resets the board on success
@@ -188,6 +212,20 @@ def _prepare_and_apply_ota(link: MQTTLink, halt_confirmed_pin: Pin, base_url: st
 # direct buck-enable line (not a relay) and is unaffected — plain active-high.
 _PSU_RELAY_ON = 0  # de-energized -> NC closed -> power flows
 _PSU_RELAY_OFF = 1  # energized -> NC open -> power cut
+
+
+def _pulse_psu_power(power_en: Pin, psu_relay: Pin) -> None:
+    """Force a real power cycle of the gateway Pi — the only way to actually
+    recover it once its OS has halted (there is no self-wake). Used by both
+    the stale-heartbeat watchdog (ACTION_REBOOT) and the OTA flow, which must
+    recover the gateway itself after asking it to halt (see
+    _prepare_and_apply_ota). power_en has no target on the relay-only field
+    build but is pulsed too, for parity with builds that do use it."""
+    power_en.value(0)
+    psu_relay.value(_PSU_RELAY_OFF)
+    time.sleep(5)
+    power_en.value(1)
+    psu_relay.value(_PSU_RELAY_ON)
 
 
 def main() -> None:
@@ -274,7 +312,7 @@ def main() -> None:
         ota_base_url = link.pop_pending_ota()
         if ota_base_url is not None:
             if state == gate_logic.PI_ON:
-                _prepare_and_apply_ota(link, halt_confirmed_pin, ota_base_url)
+                _prepare_and_apply_ota(link, halt_confirmed_pin, power_en, psu_relay, ota_base_url)
             else:
                 link.publish_telemetry({"gate_state": state, "ota_status": "skipped_not_pi_on"})
 
@@ -326,11 +364,7 @@ def main() -> None:
             power_en.value(1)
             psu_relay.value(_PSU_RELAY_ON)
         elif action == gate_logic.ACTION_REBOOT:
-            power_en.value(0)
-            psu_relay.value(_PSU_RELAY_OFF)
-            time.sleep(5)
-            power_en.value(1)
-            psu_relay.value(_PSU_RELAY_ON)
+            _pulse_psu_power(power_en, psu_relay)
             link.reset_heartbeat()
 
         if new_state != state:

@@ -25,6 +25,12 @@ reachability is brokered through the gateway Pi (which is on Tailscale),
 since the Pico cannot join a tailnet directly (see docs/pico-watchdog.md).
 Validate on hardware before relying on it in the field — a bad flash needs
 physical recovery.
+
+The gateway halt main.py requests before calling activate_staged() doesn't
+recover on its own — see ``_prepare_and_apply_ota`` in main.py, which pulses
+the PSU relay itself once the wait resolves (proceed, abort, or an
+activate_staged() failure) to guarantee the gateway comes back regardless of
+how this module's calls turn out.
 """
 
 import gc

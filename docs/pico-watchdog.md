@@ -164,6 +164,36 @@ content: |
 State = the most recent log line (glanceable); the full tail is the `log`
 attribute (Developer Tools → States, or the card above).
 
+## OTA-triggered gateway restart
+
+Applying an OTA update asks the gateway to halt first (`_prepare_and_apply_ota`
+in `main.py`), so the Pico's own post-activation reset never lands on a live
+Pi. The PSU relay's NC wiring keeps the Pi *powered* straight through that
+halt — it just goes OS-down with no self-wake — and the normal stale-heartbeat
+watchdog can't bring it back either: that watchdog is deliberately suppressed
+whenever the Pico's own MQTT link is down (see `gate_logic.decide`'s
+`mqtt_connected` gate, which exists to avoid a reboot loop when the *Pico* is
+network-blind), and the link is always down right after this since the broker
+runs on the same Pi that just halted.
+
+Worse, the gateway actually halts (`{"cmd": "prepare_shutdown"}`) the moment
+that command is sent — unconditionally, regardless of what `main.py` decides
+afterwards. So it's not just the success path that needs recovering: an OTA
+that times out waiting for `halt_confirmed` and **aborts** (leaving old
+firmware in place, by design) still leaves a genuinely halted gateway behind.
+This was found live: `halt_confirmed` never tripped on a real halt, the OTA
+aborted after its 120s timeout, and the gateway sat powered-but-halted with
+nothing watching, until it was power-cycled by hand.
+
+`_prepare_and_apply_ota` closes this by pulsing the PSU relay itself — once,
+directly — right after the wait loop resolves, before branching into
+`activate_staged()` or logging the abort. That covers proceed, abort, and an
+`activate_staged()` failure in one place, with no dependency on the Pico
+itself resetting. It's a one-shot action tied to a specific, self-triggered
+event (not an ongoing "is it actually hung?" guess), so it can't turn into
+the reboot loop the heartbeat watchdog's `mqtt_connected` guard exists to
+prevent.
+
 ## Connectivity caveat (Tailscale)
 
 There is **no native Tailscale client for the RP2350/Pico**. Therefore:
