@@ -330,6 +330,18 @@ regardless of the `when: boot` setting above, since it doesn't know about
 files it didn't create).
 
 ## Open items
+- **Persistent journald not actually taking effect (2026-07-31).** The
+  drop-in (`zz-gateway-persistent.conf` — see "Logging" above) merges
+  correctly per `systemd-analyze cat-config` (`Storage=persistent` wins over
+  Raspberry Pi OS's own `40-rpi-volatile-storage.conf`), but the running
+  `systemd-journald` kept using `/run/log/journal` (volatile) after a
+  `systemctl restart systemd-journald` — even setting `Storage=persistent`
+  directly in the main `/etc/systemd/journald.conf` had no effect. No errors
+  in `journalctl -u systemd-journald`, no AppArmor/SELinux, no service
+  sandboxing (`ProtectSystem=no`), `/var/log/journal` perms/ownership correct
+  and writable. Root cause not found; suspect the storage transition needs an
+  actual reboot rather than a service restart on this image. Re-verify next
+  time the gateway reboots.
 - Confirm ECO-WORTHY Modbus register map (voltage/current indices + scaling).
 - Tune gate thresholds + LiFePO4 SoC curve from the field-soak dataset.
 - Pick the 12V→5V buck (5A+, switchable EN) for Pi 5 peaks.

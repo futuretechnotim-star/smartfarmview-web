@@ -34,12 +34,20 @@ systemctl enable "$SERVICE"
 echo "[7/7] Enabling persistent journald logging..."
 # Volatile-by-default journald means a hang before this was installed leaves
 # zero log history to diagnose after a manual restart — see
-# docs/pico-watchdog.md and journald-gateway.conf for the incident this fixed.
+# docs/pico-watchdog.md and zz-gateway-persistent.conf for the incident this
+# fixed. Filename prefixed zz- so it sorts (and applies) after Raspberry Pi
+# OS's own 40-rpi-volatile-storage.conf drop-in, which otherwise wins.
 install -d /etc/systemd/journald.conf.d
-install -m 644 "$DEPLOY_DIR/scripts/journald-gateway.conf" \
-    /etc/systemd/journald.conf.d/gateway-persistent.conf
+install -m 644 "$DEPLOY_DIR/scripts/zz-gateway-persistent.conf" \
+    /etc/systemd/journald.conf.d/zz-gateway-persistent.conf
 install -d -m 2755 -o root -g systemd-journal /var/log/journal
 systemctl restart systemd-journald
+# NOTE (2026-07-31): confirmed the effective merged config does show
+# Storage=persistent after this, but the running journald kept writing to
+# /run/log/journal (volatile) regardless — even restarting after setting
+# Storage=persistent directly in the main journald.conf had no effect. Not
+# yet understood; a full reboot may be required for the storage transition
+# to actually take on this image. Re-verify after the next reboot.
 
 echo ""
 echo "Setup complete. Create /opt/gateway-node/.env with credentials,"
