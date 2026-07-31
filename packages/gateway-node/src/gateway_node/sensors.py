@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import signal
 import time
+from pathlib import Path
 
 import paho.mqtt.client as mqtt
 import smbus2
@@ -37,6 +38,16 @@ _running = True
 _GPS_I2C_BUS_NUMBER = 1  # /dev/i2c-1
 
 _RTK_STATUS_LABELS = {RTK_NONE: "none", RTK_FLOAT: "float", RTK_FIXED: "fixed"}
+
+
+def _cpu_temp() -> float | None:
+    """Pi 5 SoC temperature — same sysfs source field-node reads on the Pi
+    Zero (field_node/telemetry.py). Best-effort: None if the thermal zone
+    isn't present, so a read failure never breaks the rest of the payload."""
+    try:
+        return float(Path("/sys/class/thermal/thermal_zone0/temp").read_text().strip()) / 1000.0
+    except Exception:
+        return None
 
 
 def _gps_payload_fields(fix: GpsFix | None) -> dict[str, object]:
@@ -207,6 +218,20 @@ def _publish_discovery(client: mqtt.Client) -> None:
                 "device": device,
             },
         ),
+        (
+            "cpu_temp",
+            {
+                "name": "CPU Temperature",
+                "unique_id": f"{node}_cpu_temp",
+                "state_topic": state_topic,
+                "value_template": "{{ value_json.cpu_temp }}",
+                "unit_of_measurement": "°C",
+                "device_class": "temperature",
+                "state_class": "measurement",
+                "entity_category": "diagnostic",
+                "device": device,
+            },
+        ),
     ]
 
     for object_id, config in entities:
@@ -283,11 +308,14 @@ def main() -> None:
                     last_gps_fix = None
                 try:
                     payload: dict[str, object] = _gps_payload_fields(last_gps_fix)
+                    cpu_temp = _cpu_temp()
+                    payload["cpu_temp"] = round(cpu_temp, 1) if cpu_temp is not None else None
                     client.publish(state_topic, json.dumps(payload), retain=True)
                     log.info(
                         "sensors_published",
                         gps_rtk_status=payload["gps_rtk_status"],
                         gps_num_satellites=payload["gps_num_satellites"],
+                        cpu_temp=payload["cpu_temp"],
                     )
                 except Exception as e:
                     log.warning("sensor_read_error", error=str(e))

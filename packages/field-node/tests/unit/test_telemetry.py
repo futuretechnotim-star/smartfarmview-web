@@ -17,6 +17,7 @@ def test_publish_heartbeat_sends_to_correct_topic(publisher, mock_mqtt):
     with (
         patch("field_node.telemetry._cpu_temp", return_value=45.0),
         patch("field_node.telemetry._storage_percent", return_value=12.5),
+        patch("field_node.telemetry._wifi_rssi_dbm", return_value=-52.0),
     ):
         publisher.publish_heartbeat()
 
@@ -27,6 +28,7 @@ def test_publish_heartbeat_sends_to_correct_topic(publisher, mock_mqtt):
     assert "securitymesh/" in topic
     assert payload["cpu_temp"] == 45.0
     assert payload["storage_pct"] == 12.5
+    assert payload["wifi_rssi_dbm"] == -52.0
 
 
 def test_publish_skipped_when_not_connected(mock_mqtt):
@@ -35,6 +37,7 @@ def test_publish_skipped_when_not_connected(mock_mqtt):
     with (
         patch("field_node.telemetry._cpu_temp", return_value=45.0),
         patch("field_node.telemetry._storage_percent", return_value=12.5),
+        patch("field_node.telemetry._wifi_rssi_dbm", return_value=-52.0),
     ):
         pub.publish_heartbeat()
     mock_mqtt.publish.assert_not_called()
@@ -58,10 +61,11 @@ def test_publish_motion_clear(publisher, mock_mqtt):
 def test_discovery_publishes_all_entities(publisher, mock_mqtt):
     mock_mqtt.publish.reset_mock()
     publisher.publish_discovery()
-    assert mock_mqtt.publish.call_count == 16
+    assert mock_mqtt.publish.call_count == 17
     topics = [c[0][0] for c in mock_mqtt.publish.call_args_list]
     assert any("cpu_temp" in t for t in topics)
     assert any("storage_pct" in t for t in topics)
+    assert any("wifi_signal" in t for t in topics)
     assert any("motion" in t for t in topics)
     assert any("battery_voltage" in t for t in topics)
     assert any("battery_current" in t for t in topics)

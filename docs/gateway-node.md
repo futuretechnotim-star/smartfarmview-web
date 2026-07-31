@@ -148,6 +148,35 @@ it from the LiFePO4 voltage so the gateway stays chemistry-agnostic.
 Gateway → MQTT: `securitymesh/<node>/power` (mode + projection, retained) and
 `securitymesh/gateway/pi/heartbeat` (watched by the Pico's hardware watchdog).
 
+## Logging
+
+`journald` on Raspberry Pi OS Lite defaults to **volatile** storage — logs
+live in tmpfs and vanish on every reboot. Found live 2026-07-31: the gateway
+hung overnight (fully powered, invisible on Tailscale) and needed a manual
+PSU restart; there was zero log history from before that restart to diagnose
+what actually happened.
+
+`pi-setup.sh` installs
+[`journald-gateway.conf`](../packages/gateway-node/scripts/journald-gateway.conf)
+to `/etc/systemd/journald.conf.d/gateway-persistent.conf`, switching to
+`Storage=persistent` with `SystemMaxUse=500M` and `MaxRetentionSec=1week` —
+enough for a week of `tailscaled`/`hostapd`/`backhaul-select`/`wwan-watchdog`/
+`gateway-power` history, bounded so it can't fill the SD/eMMC. Re-tune
+`SystemMaxUse` once real field log volume is known.
+
+**Pico watchdog history** is folded into the same journal: `gateway-power`
+subscribes to the Pico's retained log-tail topic
+(`securitymesh/gateway/pico/log` — see [`pico-watchdog.md`](pico-watchdog.md))
+and re-logs each tail via structlog as it arrives, so it lands in
+`journalctl -u gateway-power` alongside the gateway's own events — no
+separate MQTT "listen to topic" session needed when troubleshooting after
+the fact.
+
+```bash
+journalctl -u gateway-power --since "-1 week" | grep pico_log_forwarded
+journalctl --since "-1 week" --no-pager   # everything, gateway + Pico both
+```
+
 ## Power budget — predictions to validate
 
 Estimated continuous load (Pi 5 + NVMe + SIM7600G-H dongle ~1–2W + mesh + camera

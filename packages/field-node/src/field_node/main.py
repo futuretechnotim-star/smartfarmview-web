@@ -1,12 +1,14 @@
 import datetime
 import json
 import signal
+import subprocess
 import time
 import uuid
 from pathlib import Path
 
 import structlog
 
+from field_node import connectivity_watchdog
 from field_node.camera import Camera
 from field_node.config import settings
 from field_node.motion import PIRSensor
@@ -303,6 +305,23 @@ def main() -> None:
     try:
         while _running:
             now = time.monotonic()
+
+            # Connectivity watchdog (last resort). paho's loop_start() retries
+            # the MQTT connection and field-node.service restarts a crashed
+            # process, but neither recovers a wedged OS-level WiFi link — see
+            # connectivity_watchdog.py. Reboot is the same recovery this node
+            # needed by hand after the 2026-07-31 field incident.
+            if connectivity_watchdog.should_reboot(
+                connected=telemetry.connected,
+                seconds_since_connected=telemetry.seconds_since_connected(),
+                timeout_s=settings.connectivity_reboot_timeout_s,
+            ):
+                log.warning(
+                    "connectivity_watchdog_reboot",
+                    offline_s=round(telemetry.seconds_since_connected()),
+                )
+                subprocess.run(["sudo", "/usr/sbin/reboot"], check=False)
+                time.sleep(30)  # let the reboot land instead of re-triggering every tick
 
             # Periodic check-in capture — fires in CRITICAL mode (daytime only).
             # Motion capture is suppressed in CRITICAL, so this is the only way

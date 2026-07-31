@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     # current_ma: positive = charging, negative = discharging (battery supplying load).
     pico_telemetry_topic: str = "securitymesh/gateway/pico/telemetry"
 
+    # Retained tail of the Pico's on-flash event log, republished on every
+    # Pico MQTT (re)connect (see pico-watchdog/firmware/main.py). gateway-power
+    # re-logs it via structlog on receipt so it lands in the gateway's own
+    # persistent journal (see docs/pico-watchdog.md "Remote log access") —
+    # no separate MQTT session needed to see Pico history while troubleshooting.
+    pico_log_topic: str = "securitymesh/gateway/pico/log"
+
     # Battery capacity in mAh — EcoWorthy 12.8V 20Ah LiFePO4 = 20000 mAh.
     battery_capacity_mah: int = 20000
 

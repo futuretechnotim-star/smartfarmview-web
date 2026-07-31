@@ -143,14 +143,27 @@ a long offline stretch.
   `NET_RECOVERY_TIMEOUT_S` (900 s) → `machine.reset()` (safe: the NC relay keeps
   the Pi powered across the reset). Radio-bounce path is boot-validated;
   recovery-from-actual-AP-drop still wants a `hostapd`-restart bench test.
-- **TODO — field node (`packages/field-node`):** add the equivalent self-heal.
-  It's a Pi Zero (Linux): WiFi is `wpa_supplicant`'s job, MQTT reconnect is
-  handled by paho `loop_start`, and `field-node.service` has `Restart=always`
-  for process crashes — but there's **no network-connectivity watchdog**. Add
-  one that reboots the Pi if it can't reach the broker for N minutes (the Linux
-  analogue of the Pico's `machine.reset()`), and confirm `wpa_supplicant`
-  reliably re-associates after an AP drop / on a marginal link. Without it, a
-  wedged-WiFi field node stays dark until someone drives out to power-cycle it.
+- **Field node (`packages/field-node`) — fixed** (`connectivity_watchdog.py`
+  + wiring in `main.py`): confirmed live 2026-07-31 that the gap was real —
+  after the same overnight incident that hung the gateway, LandPlanMesh1 did
+  **not** re-associate on its own; it took a physical power-switch toggle to
+  bring it back, exactly as predicted here. `main.py` now reboots
+  (`sudo /usr/sbin/reboot`, already NOPASSWD via `pi-setup.sh`) if the broker
+  has been unreachable for `connectivity_reboot_timeout_s` (900 s default,
+  matching the Pico's `NET_RECOVERY_TIMEOUT_S`) while the service should be
+  connected. `wpa_supplicant`'s own re-association behavior after an AP drop
+  is still unverified on hardware — this is a backstop for if/when it
+  doesn't, not a fix to `wpa_supplicant` itself.
+- **Gateway (`packages/gateway-node` / `pico-watchdog`) — related gap found
+  and fixed the same incident:** the gateway itself stayed powered but
+  unreachable overnight and also needed a manual PSU restart. Root cause was
+  adjacent but distinct from the field-node gap above — see
+  `docs/pico-watchdog.md` "Sustained MQTT-loss recovery" for the fix (the
+  Pico's own self-heal was resetting itself, not power-cycling the Pi). Also
+  added from the same investigation: persistent/bounded gateway journald
+  logging (`docs/gateway-node.md` "Logging" — there was no log history at all
+  to diagnose the hang from), gateway CPU temperature telemetry, and WiFi
+  RSSI telemetry on both the Pico and the field node.
 
 **Threshold calibration:** the Pico's INA3221 reads ~0.02–0.05 V *below* the PSU
 set point (graceful request fired at a 12.55 V PSU setting / 12.50 V logged).

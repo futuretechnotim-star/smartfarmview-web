@@ -86,5 +86,12 @@ class Settings(BaseSettings):
     # 3600 = one capture per hour.
     critical_capture_interval_s: int = 3600
 
+    # Connectivity watchdog — reboot the Pi if the MQTT broker has been
+    # unreachable this long (Linux analogue of the Pico's
+    # NET_RECOVERY_TIMEOUT_S; see connectivity_watchdog.py and
+    # docs/watchdog-bench-test.md "Findings — 2026-07-28"). Matches the
+    # Pico's default so both sides of the mesh time out on the same order.
+    connectivity_reboot_timeout_s: int = 900
+
 
 settings = Settings()

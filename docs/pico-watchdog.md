@@ -117,7 +117,7 @@ field soak.
 
 | Topic | Dir | Payload |
 |---|---|---|
-| `securitymesh/gateway/pico/telemetry` | pub, 30 s | JSON snapshot: `voltage_v`, `load_voltage_v`, `solar_voltage_v`, `soc_pct`, `gate_state`, `last_action`, `halt_confirmed`, `heartbeat_age_s`, `enclosure_temp_c`, `enclosure_humidity_pct`, `fan_on` |
+| `securitymesh/gateway/pico/telemetry` | pub, 30 s | JSON snapshot: `voltage_v`, `load_voltage_v`, `solar_voltage_v`, `soc_pct`, `gate_state`, `last_action`, `halt_confirmed`, `heartbeat_age_s`, `enclosure_temp_c`, `enclosure_humidity_pct`, `fan_on`, `wifi_rssi_dbm` |
 | `securitymesh/gateway/pi/heartbeat` | sub | the Pi's heartbeat the watchdog monitors |
 | `securitymesh/gateway/pico/log` | pub, **retained** | `{"log": "<last LOG_TAIL_LINES of watchdog.log>"}` |
 
@@ -164,6 +164,13 @@ content: |
 State = the most recent log line (glanceable); the full tail is the `log`
 attribute (Developer Tools → States, or the card above).
 
+**Also forwarded into the gateway's own journal.** `gateway-power` subscribes
+to this topic and re-logs each tail via structlog, so it lands in
+`journalctl -u gateway-power` (persisted for a week — see "Logging" in
+[`gateway-node.md`](gateway-node.md)) alongside the gateway's own history.
+Useful when troubleshooting after the fact and a live MQTT session isn't an
+option.
+
 ## OTA-triggered gateway restart
 
 Applying an OTA update asks the gateway to halt first (`_prepare_and_apply_ota`
@@ -193,6 +200,31 @@ itself resetting. It's a one-shot action tied to a specific, self-triggered
 event (not an ongoing "is it actually hung?" guess), so it can't turn into
 the reboot loop the heartbeat watchdog's `mqtt_connected` guard exists to
 prevent.
+
+## Sustained MQTT-loss recovery (`NET_RECOVERY_TIMEOUT_S`)
+
+While `PI_ON`, the stale-heartbeat watchdog (see the state machine diagram
+above) is deliberately suppressed whenever the Pico's own MQTT link is down
+— the heartbeat itself arrives over that same link, so a stale reading while
+disconnected means the *Pico* is network-blind, not that the Pi is hung
+(rebooting then would just power-cycle the broker too, a self-sustaining
+reboot loop).
+
+But if MQTT stays down for `NET_RECOVERY_TIMEOUT_S` (900 s) straight while
+`PI_ON`, something has to break the stalemate — and it's ambiguous *which*
+side is actually broken: the Pico's own radio, or the Pi/broker it's trying
+to reach. Found live 2026-07-31: the gateway hung overnight, fully powered
+(green LED) and invisible on Tailscale, and nothing pulsed the relay because
+this path only reset the *Pico* — which does nothing for a genuinely wedged
+Pi. It needed a manual PSU restart.
+
+`main.py`'s connectivity self-heal now pulses the PSU relay (the same
+`_pulse_psu_power` used by `ACTION_REBOOT` and the OTA recovery above)
+*before* resetting the Pico itself. This covers both possible causes in one
+action — a Pico-side radio wedge gets a fresh boot either way, and a
+genuinely hung Pi actually gets power-cycled instead of being left for a
+human to find. Safe for the same reason as the OTA case: the PSU relay's NC
+wiring keeps the Pi powered straight across the Pico's own reset.
 
 ## Connectivity caveat (Tailscale)
 

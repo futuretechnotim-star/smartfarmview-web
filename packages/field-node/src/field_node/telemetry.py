@@ -27,6 +27,21 @@ def _cpu_temp() -> float:
         return -1.0
 
 
+def _wifi_rssi_dbm() -> float | None:
+    """Best-effort WiFi signal strength in dBm, parsed from /proc/net/wireless
+    (the 'level' column). None if wlan0 isn't present or the format changes —
+    this is diagnostic telemetry, never allowed to break the heartbeat."""
+    try:
+        for line in Path("/proc/net/wireless").read_text().splitlines():
+            if not line.strip().startswith("wlan0:"):
+                continue
+            fields = line.split(":", 1)[1].split()
+            return float(fields[2])  # link, level, noise → index 2 is level
+    except Exception:
+        pass
+    return None
+
+
 def _storage_percent() -> float:
     try:
         usage = shutil.disk_usage(settings.capture_dir)
@@ -54,15 +69,14 @@ class TelemetryPublisher:
         self._client.on_disconnect = self._on_disconnect  # type: ignore[assignment]
         self._client.on_message = self._on_message
         self._connected = False
+        self._last_connected_monotonic = time.monotonic()
 
     def connect(self) -> None:
         # paho's loop_start auto-reconnects MQTT, and field-node.service is
         # Restart=always for process crashes — but neither recovers a wedged
-        # OS-level WiFi link or an unrecoverable network outage on a remote node.
-        # TODO(field-reliability): add a connectivity watchdog that reboots the
-        # Pi if the broker is unreachable for N minutes (Linux analogue of the
-        # Pico's NET_RECOVERY_TIMEOUT_S machine.reset), and verify wpa_supplicant
-        # re-associates after an AP drop / on a marginal link. See
+        # OS-level WiFi link or an unrecoverable network outage on a remote
+        # node. main.py's connectivity watchdog (connectivity_watchdog.py)
+        # covers that by rebooting after a sustained outage — see
         # docs/watchdog-bench-test.md "Findings — 2026-07-28".
         self._client.connect_async(settings.mqtt_host, settings.mqtt_port, keepalive=60)
         self._client.loop_start()
@@ -76,6 +90,7 @@ class TelemetryPublisher:
         properties: object = None,
     ) -> None:
         self._connected = True
+        self._last_connected_monotonic = time.monotonic()
         self._client.subscribe(self._topic("cmd"), qos=1)
         log.info("mqtt_connected", host=settings.mqtt_host, port=settings.mqtt_port)
         self.publish_discovery()
@@ -98,6 +113,17 @@ class TelemetryPublisher:
                 self._on_command(payload)
         except Exception as e:
             log.warning("cmd_parse_error", error=str(e))
+
+    @property
+    def connected(self) -> bool:
+        return self._connected
+
+    def seconds_since_connected(self) -> float:
+        """Seconds since the MQTT link was last (re)established — used by the
+        connectivity watchdog in main.py. 0 while connected."""
+        if self._connected:
+            return 0.0
+        return time.monotonic() - self._last_connected_monotonic
 
     def _topic(self, key: str) -> str:
         return f"securitymesh/{settings.node_id}/{key}"
@@ -164,6 +190,21 @@ class TelemetryPublisher:
                     "unit_of_measurement": "%",
                     "state_class": "measurement",
                     "icon": "mdi:micro-sd",
+                    "device": device,
+                },
+            ),
+            (
+                "sensor",
+                "wifi_signal",
+                {
+                    "name": "WiFi Signal",
+                    "unique_id": f"{node}_wifi_signal",
+                    "state_topic": telemetry_topic,
+                    "value_template": "{{ value_json.wifi_rssi_dbm }}",
+                    "unit_of_measurement": "dBm",
+                    "device_class": "signal_strength",
+                    "state_class": "measurement",
+                    "entity_category": "diagnostic",
                     "device": device,
                 },
             ),
@@ -370,6 +411,7 @@ class TelemetryPublisher:
             "ts": time.time(),
             "cpu_temp": _cpu_temp(),
             "storage_pct": _storage_percent(),
+            "wifi_rssi_dbm": _wifi_rssi_dbm(),
         }
         if camera_ok is not None:
             payload["camera_ok"] = camera_ok

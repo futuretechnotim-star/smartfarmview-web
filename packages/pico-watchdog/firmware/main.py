@@ -122,6 +122,16 @@ def _read_humidity(bme: "BME280 | None") -> "float | None":
         return None
 
 
+def _read_rssi(wlan: "network.WLAN") -> "int | None":
+    """Best-effort WiFi signal strength in dBm — diagnostic only, no impact
+    on gate_logic. Not all ports/states support status('rssi'), so this must
+    never raise into the safety loop."""
+    try:
+        return int(wlan.status("rssi"))
+    except Exception:
+        return None
+
+
 def _prepare_and_apply_ota(
     link: MQTTLink,
     halt_confirmed_pin: Pin,
@@ -297,15 +307,26 @@ def main() -> None:
         mqtt_was_connected = link.is_connected()
 
         # Connectivity self-heal (last resort). While the Pi should be up
-        # (PI_ON) the broker is reachable, so sustained MQTT loss means our own
-        # link is wedged in a way even the radio-bounce reconnect hasn't
-        # cleared — reboot to recover unattended. Safe while PI_ON: the NC relay
-        # keeps the Pi powered across the Pico's reset. Gated on PI_ON so a
-        # legitimate broker-down window (Pi off in PI_OFF) never triggers it.
+        # (PI_ON), sustained MQTT loss means either our own radio is wedged in
+        # a way the reconnect hasn't cleared, OR the broker itself is
+        # unreachable because the Pi it runs on has hung — a genuinely halted-
+        # but-powered Pi (green LED, no self-wake) looks identical to the Pico
+        # as "broker unreachable" and is exactly what the stale-heartbeat
+        # watchdog above can't catch (it's deliberately suppressed whenever
+        # mqtt_connected is false, since the heartbeat itself arrives over
+        # this same link — see gate_logic.decide). Found live 2026-07-31: the
+        # gateway hung overnight, fully powered, invisible on Tailscale, and
+        # needed a physical PSU restart because nothing pulsed the relay.
+        # So this pulses the PSU relay — the same recovery action as
+        # ACTION_REBOOT — before resetting the Pico itself. Safe while PI_ON:
+        # the NC relay keeps the Pi powered across the Pico's own reset, same
+        # as the plain self-heal this replaces. Gated on PI_ON so a legitimate
+        # broker-down window (Pi off in PI_OFF) never triggers it.
         if state == gate_logic.PI_ON and link.is_connected():
             last_mqtt_ok = now
         elif state == gate_logic.PI_ON and now - last_mqtt_ok >= config.NET_RECOVERY_TIMEOUT_S:
-            log.append(f"net_recovery_reset offline_s={round(now - last_mqtt_ok)}")
+            log.append(f"net_recovery_reboot offline_s={round(now - last_mqtt_ok)}")
+            _pulse_psu_power(power_en, psu_relay)
             time.sleep(0.3)  # let the flash write land before we reset
             reset()
 
@@ -321,6 +342,7 @@ def main() -> None:
         solar_voltage_v = _read_ina_channel(ina, config.INA3221_CH_SOLAR)
         enclosure_temp_c = _read_temperature(bme)
         enclosure_humidity_pct = _read_humidity(bme)
+        wifi_rssi_dbm = _read_rssi(wlan)
 
         if enclosure_temp_c is not None:
             fan_on = fan_logic.decide(
@@ -402,6 +424,7 @@ def main() -> None:
                         else None
                     ),
                     "fan_on": fan_on,
+                    "wifi_rssi_dbm": wifi_rssi_dbm,
                 }
             )
             last_telemetry = now

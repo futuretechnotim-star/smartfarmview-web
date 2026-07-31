@@ -189,6 +189,21 @@ def _publish_gateway_discovery(client: mqtt.Client) -> None:
             },
         ),
         (
+            "sensor",
+            "pico_wifi_signal",
+            {
+                "name": "Pico WiFi Signal",
+                "unique_id": f"{node}_pico_wifi_signal",
+                "state_topic": pico_topic,
+                "value_template": "{{ value_json.wifi_rssi_dbm }}",
+                "unit_of_measurement": "dBm",
+                "device_class": "signal_strength",
+                "state_class": "measurement",
+                "entity_category": "diagnostic",
+                "device": device,
+            },
+        ),
+        (
             "binary_sensor",
             "cabinet_fan",
             {
@@ -258,6 +273,7 @@ def main() -> None:
     def on_connect(c: mqtt.Client, userdata: Any, flags: Any, rc: Any, props: Any = None) -> None:
         log.info("mqtt_connected", host=settings.mqtt_host, port=settings.mqtt_port)
         c.subscribe(settings.pico_telemetry_topic)
+        c.subscribe(settings.pico_log_topic)
         c.subscribe(f"securitymesh/{settings.node_id}/cmd")
         # Field nodes have no dedicated heartbeat topic — telemetry.publish_heartbeat()
         # (field_node/telemetry.py) actually publishes onto the regular "telemetry"
@@ -284,6 +300,19 @@ def main() -> None:
                     request_shutdown()
             except Exception as e:
                 log.warning("cmd_parse_error", error=str(e))
+            return
+
+        # ── Pico log tail (retained, republished on every Pico MQTT reconnect) ──
+        # Re-logged here (not just relayed) so it lands in gateway-power's own
+        # structlog output — which systemd persists to the journal — giving a
+        # single, durable place to see Pico history without a separate MQTT
+        # "listen to topic" session. See docs/pico-watchdog.md.
+        if msg.topic == settings.pico_log_topic:
+            try:
+                data = json.loads(msg.payload.decode())
+                log.info("pico_log_forwarded", log=data.get("log", ""))
+            except (ValueError, TypeError) as e:
+                log.warning("pico_log_parse_error", error=str(e))
             return
 
         # ── Field node telemetry (doubles as presence/heartbeat) ─────────────────
