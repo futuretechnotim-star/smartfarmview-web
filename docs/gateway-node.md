@@ -250,7 +250,10 @@ nothing ever failed over). Two systemd timers close that gap:
   only runs `wwan-up.sh` once at boot. If the LTE modem drops and
   re-enumerates mid-session (seen after a marginal power event), nothing
   re-triggers it; the watchdog restarts `wwan0.service` if `wwan0` has no
-  default route.
+  default route, **or** if the route exists but two consecutive real
+  reachability checks (ping, same as `backhaul-select`) fail — see the
+  2026-08-06 incident below for why the route-only check wasn't enough on
+  its own.
 - **`backhaul-select.timer`** (every 30 s) — pings 1.1.1.1/8.8.8.8 through
   each interface that currently has a default route, and reorders route
   metrics so the healthiest one is primary. It never creates or deletes a
@@ -270,6 +273,37 @@ nothing ever failed over). Two systemd timers close that gap:
 - `wlan0` does **not** reliably auto-reconnect to a saved WiFi network on its
   own once it comes back into range after being down — a known gap, not yet
   automated. `sudo nmcli connection up 'Supervisor wlan0'` forces it.
+
+**Incident, 2026-08-06 — 14h silent LTE death, "route present but 100% loss."**
+The gateway went unreachable on Tailscale for ~13h (offline, last seen via
+DERP relay "ord"); physical inspection found power/hardware fine (14.5V
+battery, no under-voltage flags, no kernel/USB errors, no ModemManager
+reconnect events during the outage window). `backhaul-select`'s own ping log
+showed `wwan0: loss=100% rtt=9999ms` on every ~30s check continuously from
+**05:01:17 to 19:05** — the SIM7600G-H's QMI data session died silently (no
+kernel/ModemManager event logged the drop) while the interface and default
+route stayed present the whole time. Two gaps let this run 14h instead of
+self-healing in minutes:
+1. `wwan-watchdog.sh` only checked route *existence*, not reachability — it
+   reported healthy every 2 min the entire time. **Fixed**: it now runs the
+   same ping check as `backhaul-select` and restarts `wwan0.service` after
+   two consecutive dead checks (~4 min detection window), not just a missing
+   route.
+2. `backhaul-select` correctly detected the dead link the whole time (that's
+   exactly what it's built for) but had nothing to fail over to — `wlan0`
+   never had a route during this test (WebsterFiber wasn't connected), so its
+   route-reordering self-heal is a no-op with only one candidate. This is a
+   known limitation, not fixed here: `backhaul-select` reorders metrics
+   between *existing* routes, it doesn't resurrect a dead interface. That's
+   `wwan-watchdog`'s job — see fix above.
+
+A second, separate ungraceful reboot was also observed ~11 min after the
+manual power-cycle that ended the above: the pico-watchdog's own
+`net_recovery_reboot` (see `docs/pico-watchdog.md`) fired on `mqtt=False`,
+most likely catching the Pi still mid-boot (Home Assistant Supervisor +
+several Docker add-ons take a while to fully come up from cold) rather than
+a genuine second hang. Not fixed here — worth revisiting the pico's
+offline-before-reboot timeout if this recurs.
 
 ### Field-node MQTT / HA / media integration
 
