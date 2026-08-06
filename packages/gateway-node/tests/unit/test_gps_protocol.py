@@ -11,6 +11,8 @@ from gateway_node.gps_protocol import (
     CFG_MSGOUT_UBX_NAV_PVT_I2C,
     NAV_PVT_LENGTH,
     NAV_PVT_STRUCT,
+    NAV_SVIN_LENGTH,
+    NAV_SVIN_STRUCT,
     RTK_FIXED,
     RTK_FLOAT,
     RTK_NONE,
@@ -28,6 +30,7 @@ from gateway_node.gps_protocol import (
     build_ubx_frame,
     find_ack,
     parse_nav_pvt,
+    parse_nav_svin,
     verify_checksum,
 )
 
@@ -117,6 +120,55 @@ class TestParseNavPvt:
     def test_pdop_scaling(self):
         fix = parse_nav_pvt(_nav_pvt_payload(pdop_scaled=150))
         assert round(fix.pdop, 2) == 1.50
+
+
+def _nav_svin_payload(
+    *,
+    dur_s: int = 120,
+    mean_acc_mm_tenths: int = 15000,  # 1.5 m in 0.1mm units
+    valid: int = 0,
+    active: int = 1,
+) -> bytes:
+    packed = NAV_SVIN_STRUCT.pack(
+        0,  # version
+        b"\x00\x00\x00",  # reserved1
+        0,  # iTOW
+        dur_s,
+        0,
+        0,
+        0,  # meanX meanY meanZ
+        0,
+        0,
+        0,  # meanXHP meanYHP meanZHP
+        0,  # reserved2
+        mean_acc_mm_tenths,
+        0,  # obs
+        valid,
+        active,
+        b"\x00\x00",  # reserved3
+    )
+    return packed + bytes(NAV_SVIN_LENGTH - len(packed))
+
+
+class TestParseNavSvin:
+    def test_too_short_returns_none(self):
+        assert parse_nav_svin(b"\x00" * 10) is None
+
+    def test_extracts_duration_and_accuracy(self):
+        svin = parse_nav_svin(_nav_svin_payload(dur_s=180, mean_acc_mm_tenths=25000))
+        assert svin is not None
+        assert svin.dur_s == 180
+        assert round(svin.mean_acc_m, 3) == 2.5
+
+    def test_not_valid_while_surveying(self):
+        svin = parse_nav_svin(_nav_svin_payload(valid=0, active=1))
+        assert svin.valid is False
+        assert svin.active is True
+
+    def test_valid_once_survey_completes(self):
+        svin = parse_nav_svin(_nav_svin_payload(valid=1, active=0))
+        assert svin.valid is True
+        assert svin.active is False
 
 
 class TestChecksumAndFraming:

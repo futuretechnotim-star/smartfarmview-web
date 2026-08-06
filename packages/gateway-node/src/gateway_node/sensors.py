@@ -29,8 +29,20 @@ import smbus2
 import structlog
 
 from gateway_node.config import settings
+from gateway_node.gps_base_mode import (
+    ACTION_ENTER_BASE,
+    ACTION_EXIT_BASE,
+    ACTION_START_SURVEY,
+    BASE_ACTIVE,
+    CMD_START_SURVEY,
+    CMD_STOP_BASE,
+    ROVER_NAV,
+    SURVEYING,
+    decide,
+)
 from gateway_node.gps_driver import ZedF9pDriver
-from gateway_node.gps_protocol import RTK_FIXED, RTK_FLOAT, RTK_NONE, GpsFix
+from gateway_node.gps_protocol import RTK_FIXED, RTK_FLOAT, RTK_NONE, GpsFix, SvinStatus
+from gateway_node.ntrip_caster import NtripCaster
 
 log = structlog.get_logger()
 
@@ -73,6 +85,14 @@ def _gps_payload_fields(fix: GpsFix | None) -> dict[str, object]:
         "gps_v_acc_m": round(fix.vertical_accuracy_m, 3),
         "gps_rtk_status": _RTK_STATUS_LABELS.get(fix.rtk_status, "none"),
         "gps_pdop": round(fix.pdop, 2),
+    }
+
+
+def _base_payload_fields(state: str, svin: SvinStatus | None) -> dict[str, object]:
+    return {
+        "gps_base_state": state,
+        "gps_svin_duration_s": svin.dur_s if svin is not None else None,
+        "gps_svin_meanacc_m": round(svin.mean_acc_m, 3) if svin is not None else None,
     }
 
 
@@ -232,10 +252,79 @@ def _publish_discovery(client: mqtt.Client) -> None:
                 "device": device,
             },
         ),
+        (
+            "gps_base_state",
+            {
+                "name": "GPS Base State",
+                "unique_id": f"{node}_gps_base_state",
+                "state_topic": state_topic,
+                "value_template": "{{ value_json.gps_base_state }}",
+                "icon": "mdi:radio-tower",
+                "device": device,
+            },
+        ),
+        (
+            "gps_svin_duration",
+            {
+                "name": "GPS Survey-In Duration",
+                "unique_id": f"{node}_gps_svin_duration",
+                "state_topic": state_topic,
+                "value_template": "{{ value_json.gps_svin_duration_s }}",
+                "unit_of_measurement": "s",
+                "device_class": "duration",
+                "state_class": "measurement",
+                "icon": "mdi:timer-sand",
+                "device": device,
+            },
+        ),
+        (
+            "gps_svin_meanacc",
+            {
+                "name": "GPS Survey-In Accuracy",
+                "unique_id": f"{node}_gps_svin_meanacc",
+                "state_topic": state_topic,
+                "value_template": "{{ value_json.gps_svin_meanacc_m }}",
+                "unit_of_measurement": "m",
+                "device_class": "distance",
+                "state_class": "measurement",
+                "icon": "mdi:target",
+                "device": device,
+            },
+        ),
     ]
 
     for object_id, config in entities:
         topic = f"{prefix}/sensor/{node}/{object_id}/config"
+        client.publish(topic, json.dumps(config), qos=1, retain=True)
+        log.info("discovery_published", object_id=object_id)
+
+    cmd_topic = f"securitymesh/{node}/cmd"
+    buttons: list[tuple[str, dict[str, object]]] = [
+        (
+            "gps_start_survey",
+            {
+                "name": "GPS Start Survey",
+                "unique_id": f"{node}_gps_start_survey",
+                "command_topic": cmd_topic,
+                "payload_press": json.dumps({"cmd": CMD_START_SURVEY}),
+                "icon": "mdi:crosshairs-gps",
+                "device": device,
+            },
+        ),
+        (
+            "gps_stop_base",
+            {
+                "name": "GPS Stop Base",
+                "unique_id": f"{node}_gps_stop_base",
+                "command_topic": cmd_topic,
+                "payload_press": json.dumps({"cmd": CMD_STOP_BASE}),
+                "icon": "mdi:stop-circle-outline",
+                "device": device,
+            },
+        ),
+    ]
+    for object_id, config in buttons:
+        topic = f"{prefix}/button/{node}/{object_id}/config"
         client.publish(topic, json.dumps(config), qos=1, retain=True)
         log.info("discovery_published", object_id=object_id)
 
@@ -257,6 +346,18 @@ def main() -> None:
     last_gps_fix: GpsFix | None = None
     last_gps_fix_monotonic = 0.0
 
+    # RTK base-station mode (see gps_base_mode.py). base_state governs which
+    # of NAV-PVT/NAV-SVIN/RTCM3 is currently enabled on I2C — never more than
+    # one at once, see gps_driver.py.
+    base_state = ROVER_NAV
+    last_svin: SvinStatus | None = None
+    pending_cmd: str | None = None
+
+    caster: NtripCaster | None = None
+    if gps is not None:
+        caster = NtripCaster(settings.rtk_caster_port, settings.rtk_mountpoint)
+        caster.start()
+
     # ── MQTT ─────────────────────────────────────────────────────────────────
     client: mqtt.Client = mqtt.Client(
         mqtt.CallbackAPIVersion.VERSION2,  # type: ignore[attr-defined]
@@ -265,13 +366,34 @@ def main() -> None:
     if settings.mqtt_username:
         client.username_pw_set(settings.mqtt_username, settings.mqtt_password)
 
+    cmd_topic = f"securitymesh/{settings.node_id}/cmd"
+
     def on_connect(
         c: mqtt.Client, userdata: object, flags: object, rc: object, props: object = None
     ) -> None:
         log.info("mqtt_connected")
+        c.subscribe(cmd_topic)
         _publish_discovery(c)
 
+    def on_message(c: mqtt.Client, userdata: object, msg: mqtt.MQTTMessage) -> None:
+        nonlocal pending_cmd
+        if msg.topic != cmd_topic:
+            return
+        try:
+            data = json.loads(msg.payload.decode())
+        except Exception as e:
+            log.warning("cmd_parse_error", error=str(e))
+            return
+        cmd = data.get("cmd")
+        # This topic is shared with gateway-power's capture/prepare_shutdown
+        # commands (multiple listeners on one topic is an established
+        # pattern here) — only react to the two we own.
+        if cmd in (CMD_START_SURVEY, CMD_STOP_BASE):
+            pending_cmd = cmd
+            log.info("gps_base_command_received", cmd=cmd)
+
     client.on_connect = on_connect
+    client.on_message = on_message
     client.connect(settings.mqtt_host, settings.mqtt_port, keepalive=60)
     client.loop_start()
 
@@ -282,20 +404,45 @@ def main() -> None:
         while _running:
             now = time.monotonic()
 
-            # Drain the GPS module every loop tick (~1s), independent of the
-            # publish cadence below. The ZED-F9P's I2C output buffer is small
-            # and a NAV-PVT frame lands every second — waiting a full
-            # sensors_poll_interval_seconds (60s default) between drains lets
-            # far more back up than the buffer holds, overflowing it and
-            # corrupting/dropping frames long before anything looks like an
-            # I2C error. Confirmed against a standalone script that drained
-            # every ~0.2s and never dropped a fix in 175s straight, versus
-            # this service (draining only once a minute) rarely holding one.
+            # Drain whatever the current base_state has enabled on I2C every
+            # loop tick (~1s), independent of the publish cadence below. The
+            # ZED-F9P's I2C output buffer is small and fills within seconds,
+            # so waiting a full sensors_poll_interval_seconds (60s default)
+            # between drains lets far more back up than the buffer holds,
+            # overflowing it and corrupting/dropping frames long before
+            # anything looks like an I2C error. Confirmed against a
+            # standalone script that drained every ~0.2s and never dropped a
+            # fix in 175s straight, versus this service (draining only once
+            # a minute) rarely holding one.
             if gps is not None:
-                fix = gps.drain_latest_fix()
-                if fix is not None:
-                    last_gps_fix = fix
-                    last_gps_fix_monotonic = now
+                if base_state == ROVER_NAV:
+                    fix = gps.drain_latest_fix()
+                    if fix is not None:
+                        last_gps_fix = fix
+                        last_gps_fix_monotonic = now
+                elif base_state == SURVEYING:
+                    svin = gps.poll_svin_status()
+                    if svin is not None:
+                        last_svin = svin
+                elif base_state == BASE_ACTIVE:
+                    rtcm = gps.drain_rtcm3()
+                    if rtcm and caster is not None:
+                        caster.feed(rtcm)
+
+                new_state, action = decide(base_state, pending_cmd, last_svin)
+                pending_cmd = None
+                if action == ACTION_START_SURVEY:
+                    gps.enter_survey_in(settings.gps_svin_min_dur_s, settings.gps_svin_acc_limit_m)
+                    last_gps_fix = None
+                    last_svin = None
+                elif action == ACTION_ENTER_BASE:
+                    gps.enter_base_active()
+                elif action == ACTION_EXIT_BASE:
+                    gps.exit_base_mode()
+                    last_svin = None
+                if new_state != base_state:
+                    log.info("gps_base_state_changed", old=base_state, new=new_state, action=action)
+                base_state = new_state
 
             if now - last_poll >= settings.sensors_poll_interval_seconds:
                 if last_gps_fix is not None and _is_fix_stale(
@@ -308,6 +455,7 @@ def main() -> None:
                     last_gps_fix = None
                 try:
                     payload: dict[str, object] = _gps_payload_fields(last_gps_fix)
+                    payload.update(_base_payload_fields(base_state, last_svin))
                     cpu_temp = _cpu_temp()
                     payload["cpu_temp"] = round(cpu_temp, 1) if cpu_temp is not None else None
                     client.publish(state_topic, json.dumps(payload), retain=True)
@@ -315,6 +463,7 @@ def main() -> None:
                         "sensors_published",
                         gps_rtk_status=payload["gps_rtk_status"],
                         gps_num_satellites=payload["gps_num_satellites"],
+                        gps_base_state=payload["gps_base_state"],
                         cpu_temp=payload["cpu_temp"],
                     )
                 except Exception as e:
@@ -323,6 +472,8 @@ def main() -> None:
 
             time.sleep(1)
     finally:
+        if caster is not None:
+            caster.stop()
         client.loop_stop()
         client.disconnect()
         log.info("sensors_service_stopped")

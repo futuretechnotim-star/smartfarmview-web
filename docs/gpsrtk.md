@@ -11,6 +11,10 @@ ZED-F9P's small DDC (I2C) transmit buffer and wedged its periodic-message
 output. Disabling NMEA + RTCM3 on the I2C port makes NAV-PVT stream
 continuously. See "Root cause" below.
 
+**Update 2026-08-02:** base-station mode (survey-in → RTCM3 output → local
+NTRIP caster) is now built — see "Base-station mode" below. It re-enables
+RTCM3 on I2C, but mode-switched, never concurrent with NAV-PVT.
+
 ## Root cause
 
 The ZED-F9P was configured to emit **three protocols on the I2C output port** —
@@ -73,23 +77,66 @@ pure and unit-tested in [`test_gps_protocol.py`](../packages/gateway-node/tests/
 `gps_driver.py` is hardware-dependent I2C glue and exempt per this repo's TDD
 conventions.
 
-## ⚠️ Base-station / rover TODO — RTCM3 was disabled on I2C
+## Base-station mode — built 2026-08-02
 
-This gateway is intended as the **RTK base station**; the **rover is a DIY
-handheld survey stick** using the same ZED-F9P. The whole point is to make the
-rover more accurate: two receivers plus a way to share the base's correction
-data (RTCM3). **That correction-sharing path is not built yet** — it may run
-over the field mesh or over the internet; this base station was only the first
-step.
+The correction-sharing path above is now built, and it **does** put RTCM3 back
+on I2C — just never *concurrently* with NAV-PVT, which is the actual failure
+mode from the root cause above (not "RTCM3 on I2C" per se). The gateway is a
+single-owner I2C bus with three mutually-exclusive output modes, sequenced by
+[`gps_base_mode.py`](../packages/gateway-node/src/gateway_node/gps_base_mode.py):
 
-The fix above **disables RTCM3 output on the I2C port**. That is safe *right
-now* because nothing consumes RTCM3 over I2C (the gateway only reads NAV-PVT,
-and no rover link exists yet). `MON-COMMS` shows heavy TX on UART2, so if
-corrections are ever taken off the module directly they should come from a UART,
-**not** the I2C port — I2C must stay UBX-only or the DDC-overload symptom
-returns. **When the correction-sharing link is designed, revisit this config:**
-route RTCM3 out a UART (or read it from a source that isn't the NAV-PVT I2C
-stream), and keep I2C dedicated to NAV-PVT.
+```
+ROVER_NAV ──(gps_start_survey cmd)──► SURVEYING ──(svinValid)──► BASE_ACTIVE
+   ▲                                                                   │
+   └───────────────────────(gps_stop_base cmd)────────────────────────┘
+```
+
+- **ROVER_NAV** (default/today's behavior): `CFG-MSGOUT-UBX_NAV_PVT_I2C=1`,
+  everything else off. Same config as the fix above.
+- **SURVEYING**: NAV-PVT off, `CFG-TMODE-MODE=1` (survey-in armed),
+  `CFG-MSGOUT-UBX_NAV_SVIN_I2C=1` to track `dur`/`meanAcc` progress. Entered
+  manually via an MQTT command (`{"cmd": "gps_start_survey"}` on
+  `securitymesh/{node}/cmd`, or the `button.gps_start_survey` HA entity) —
+  not automatic.
+- **BASE_ACTIVE**: once the module reports `svinValid`, NAV-SVIN off, the
+  three RTCM3 messages on ([`gps_driver.py`](../packages/gateway-node/src/gateway_node/gps_driver.py)'s
+  `enter_base_active()`) — station ARP (1005), GPS MSM7 (1077), GLONASS
+  biases (1230). Deliberately minimal (not full 4-constellation MSM7) to keep
+  DDC byte volume low while this is freshly live — expand later once
+  confirmed stable over a real multi-hour run.
+
+`gps_driver.py`'s `drain_rtcm3()` relays the raw BASE_ACTIVE I2C stream
+(no UBX framing once RTCM3-only) to [`ntrip_caster.py`](../packages/gateway-node/src/gateway_node/ntrip_caster.py),
+a local NTRIP caster (`http://<gateway>:2101/SFV_BASE` by default) serving
+corrections on the field-mesh WiFi. This reuses NTRIP for the local hop too,
+not just the survey stick's originally-designed
+`caster → internet → phone → BLE` path — see
+[`landplan/docs/mobile/requirements-gps.md`](../../landplan/landplan/docs/mobile/requirements-gps.md)
+§6.5 — so the survey stick's Pi Zero only ever needs one NTRIP-client
+implementation, whichever transport is live. Its own NTRIP client isn't built
+yet; that's cross-repo work, out of scope here (see the Codex handoff for
+what it needs).
+
+### Survey-in duration/accuracy tradeoff
+
+`gps_svin_min_dur_s` (default 300s) and `gps_svin_acc_limit_m` (default 2.5m)
+set how long/precise the survey-in must be before the module reports
+`svinValid` and RTCM3 starts. A longer survey narrows the base's *absolute*
+position error, but for RTK the number that actually matters to the rover is
+the base-to-rover *relative* geometry — corrections are differential, so a
+base whose absolute position is off by a couple of meters still yields
+centimeter-level rover accuracy relative to that (slightly-off) reference
+point. A short, loose survey-in is therefore fine for day-to-day relative
+survey work; only re-survey longer/tighter if the base's absolute coordinates
+themselves need to be trustworthy (e.g. tying survey data to a known real-
+world reference).
+
+### Open risk — needs live confirmation
+
+The DDC-overrun root cause above was diagnosed with UBX+NMEA+RTCM3 all
+enabled at once; RTCM3-alone in BASE_ACTIVE hasn't been run live yet. Confirm
+via `MON-COMMS` `txPeak`/error flags the same way this investigation did,
+before trusting BASE_ACTIVE unattended for long periods.
 
 ## Retained mitigations (still active, now belt-and-suspenders)
 

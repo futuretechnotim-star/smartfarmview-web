@@ -2,8 +2,9 @@
 fix-staleness decision) — the I2C polling loop itself is hardware-dependent
 and exempt per this repo's TDD conventions."""
 
-from gateway_node.gps_protocol import RTK_FIXED, RTK_NONE, GpsFix
-from gateway_node.sensors import _gps_payload_fields, _is_fix_stale
+from gateway_node.gps_base_mode import BASE_ACTIVE, ROVER_NAV, SURVEYING
+from gateway_node.gps_protocol import RTK_FIXED, RTK_NONE, GpsFix, SvinStatus
+from gateway_node.sensors import _base_payload_fields, _gps_payload_fields, _is_fix_stale
 
 
 def _fix(**overrides: object) -> GpsFix:
@@ -48,6 +49,27 @@ class TestGpsPayloadFields:
     def test_rtk_status_label_maps_from_enum(self):
         payload = _gps_payload_fields(_fix(rtk_status=RTK_FIXED))
         assert payload["gps_rtk_status"] == "fixed"
+
+
+class TestBasePayloadFields:
+    def test_rover_nav_with_no_svin(self):
+        payload = _base_payload_fields(ROVER_NAV, None)
+        assert payload == {
+            "gps_base_state": ROVER_NAV,
+            "gps_svin_duration_s": None,
+            "gps_svin_meanacc_m": None,
+        }
+
+    def test_surveying_surfaces_duration_and_accuracy(self):
+        svin = SvinStatus(dur_s=90, mean_acc_m=1.2345, valid=False, active=True)
+        payload = _base_payload_fields(SURVEYING, svin)
+        assert payload["gps_base_state"] == SURVEYING
+        assert payload["gps_svin_duration_s"] == 90
+        assert payload["gps_svin_meanacc_m"] == round(1.2345, 3)
+
+    def test_base_active_state_label(self):
+        payload = _base_payload_fields(BASE_ACTIVE, None)
+        assert payload["gps_base_state"] == BASE_ACTIVE
 
 
 class TestIsFixStale:

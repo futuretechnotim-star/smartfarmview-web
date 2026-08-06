@@ -24,6 +24,7 @@ UBX_CLASS_ACK = 0x05
 UBX_CLASS_CFG = 0x06
 
 UBX_NAV_PVT = 0x07
+UBX_NAV_SVIN = 0x3B
 UBX_CFG_MSG = 0x01  # legacy CFG-MSG (superseded by CFG-VALSET below)
 UBX_CFG_VALSET = 0x8A
 UBX_ACK_NAK = 0x00
@@ -53,6 +54,23 @@ CFG_I2COUTPROT_UBX = 0x10720001
 CFG_I2COUTPROT_NMEA = 0x10720002
 CFG_I2COUTPROT_RTCM3X = 0x10720004
 CFG_MSGOUT_UBX_NAV_PVT_I2C = 0x20910006
+
+# RTK base-station (survey-in / TMODE3) keys — see gps_base_mode.py for the
+# state machine that sequences these. Values verified against two independent
+# open-source u-blox key-ID tables (gpsd's ubxtool.in and phkehl/ubloxcfg's
+# ubloxcfg_gen.c, both agreeing, and cross-checked against the already-live
+# CFG_MSGOUT_UBX_NAV_PVT_I2C key above as a sanity anchor) — not hand-guessed.
+# Still worth a live ACK check on first flash, same as any other CFG-VALSET.
+CFG_TMODE_MODE = 0x20030001  # E1: 0=disabled 1=survey-in 2=fixed
+CFG_TMODE_SVIN_MIN_DUR = 0x40030010  # U4, seconds
+CFG_TMODE_SVIN_ACC_LIMIT = 0x40030011  # U4, 0.1mm units
+CFG_MSGOUT_UBX_NAV_SVIN_I2C = 0x20910088
+CFG_MSGOUT_RTCM_1005_I2C = 0x209102BD  # station ARP (antenna reference point)
+CFG_MSGOUT_RTCM_1077_I2C = 0x209102CC  # GPS MSM7
+CFG_MSGOUT_RTCM_1230_I2C = 0x20910303  # GLONASS code-phase biases
+
+TMODE_DISABLED = 0
+TMODE_SURVEY_IN = 1
 
 # Largest UBX payload this driver will wait to complete before treating a sync
 # match as spurious and resyncing. No message we read (NAV-PVT is 92 B, ACK is
@@ -91,6 +109,23 @@ class GpsFix:
     vertical_accuracy_m: float
     rtk_status: int  # RTK_NONE / RTK_FLOAT / RTK_FIXED
     pdop: float
+
+
+NAV_SVIN_LENGTH = 40
+# Little-endian: version,reserved1[3],iTOW,dur,meanX,meanY,meanZ,meanXHP,
+# meanYHP,meanZHP,reserved2,meanAcc,obs,valid,active,reserved3[2] — per the
+# u-blox ZED-F9P interface description. We only surface dur/meanAcc/valid/
+# active; the mean position fields are the module's own internal survey
+# result and aren't needed here (see gps_base_mode.py's BASE_ACTIVE note).
+NAV_SVIN_STRUCT = struct.Struct("<B3sIIiiibbbBIIBB2s")
+
+
+@dataclass
+class SvinStatus:
+    dur_s: int
+    mean_acc_m: float
+    valid: bool
+    active: bool
 
 
 def build_ubx_frame(msg_class: int, msg_id: int, payload: bytes) -> bytes:
@@ -181,6 +216,20 @@ def parse_nav_pvt(payload: bytes) -> GpsFix | None:
         vertical_accuracy_m=f[19] * 1e-3,
         rtk_status=carr_soln,
         pdop=f[27] * 0.01,
+    )
+
+
+def parse_nav_svin(payload: bytes) -> SvinStatus | None:
+    """Parse a NAV-SVIN payload. Returns None if the payload is too short."""
+    if len(payload) < NAV_SVIN_LENGTH:
+        return None
+    f = NAV_SVIN_STRUCT.unpack_from(payload[: NAV_SVIN_STRUCT.size])
+    # Tuple indices: 3=dur 11=meanAcc 13=valid 14=active
+    return SvinStatus(
+        dur_s=f[3],
+        mean_acc_m=f[11] * 1e-4,
+        valid=bool(f[13]),
+        active=bool(f[14]),
     )
 
 

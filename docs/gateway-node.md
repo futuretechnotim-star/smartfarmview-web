@@ -47,7 +47,7 @@ HA always gets first chance to act gracefully. See
 | Power controller | Raspberry Pi Pico 2 W | gates Pi 5V, watchdog, wake-on-recharge |
 | Uplink + GNSS | Waveshare SIM7600G-H **4G Dongle** | USB plug-in; 4G/3G/2G global bands; GPS/BeiDou/Glonass/LBS; AT&T compatible |
 | Field node WiFi AP | BrosTrend AC5L USB adapter | RTL8821CU — in-kernel `rtw88_8821cu` driver (no DKMS); wlan1; 2.4GHz AP for field nodes |
-| RTK base station | SparkFun ZED-F9P (roadmap) | see [RTK section](#rtk-base-station--roadmap) |
+| RTK base station | SparkFun ZED-F9P (I2C @ 0x42, bus 1) | see [RTK section](#rtk-base-station) |
 
 ### Uplink + GNSS (SIM7600G-H 4G Dongle)
 
@@ -88,28 +88,33 @@ when MM starts. `wwan0.service` runs `udevadm trigger --sysname-match=ttyUSB*` b
 The dongle's GNSS provides **coarse position + time** (GPS/BeiDou/Glonass).
 This is sufficient for `gpsd`/`chrony` (stratum-1 NTP for the mesh) and a
 geographic reference. It **cannot** act as an RTK base station — that requires
-a precision receiver outputting raw RTCM3 observations (see roadmap below).
+a precision receiver outputting raw RTCM3 observations (see below).
 
-### RTK base station — roadmap
+### RTK base station
 
-The gateway is the natural host for an RTK base station once RTK rover
-capability is added to the platform. Hardware already validated in the LandPlan
-survey stick: **SparkFun ZED-F9P** (or equivalent F9P breakout).
+Built via I2C, not the USB/UART `str2str` design originally sketched here —
+see [`docs/gpsrtk.md`](gpsrtk.md) for the full story (an earlier "GPS goes
+silent" bug and its root cause) and the design decision.
 
-When implemented:
-- ZED-F9P connects to the Pi over USB (or UART)
-- `str2str` (RTKLIB) reads RTCM3 observations from the F9P
-- Options for correction broadcast:
-  - **NTRIP caster** — corrections pulled by rovers over cellular/mesh
-  - **Mesh multicast** — RTCM3 broadcast over BATMAN-adv for on-property rovers
-  - **LoRa fallback** — long-range broadcast for areas outside WiFi mesh range
-- The SIM7600G-H dongle remains the internet uplink; the F9P is an additional
-  USB device alongside it
+**SparkFun ZED-F9P** on I2C bus 1 (`0x42`), the same module and bus validated
+in the LandPlan survey stick, shared with `gateway-sensors.service`'s other
+readings. The module has exactly one output mode active at a time — NAV-PVT
+(everyday rover-style fix), NAV-SVIN (survey-in progress), or RTCM3 (base
+active) — sequenced by
+[`gps_base_mode.py`](../packages/gateway-node/src/gateway_node/gps_base_mode.py)'s
+pure state machine, never concurrently: the DDC (I2C) TX buffer is small
+enough that mixing streams is what caused the original outage.
 
-The SIM7600G-H GNSS is **not** used for RTK base positioning — the F9P has its
-own high-precision GNSS front-end and antenna.
+Corrections go out over a local NTRIP caster
+([`ntrip_caster.py`](../packages/gateway-node/src/gateway_node/ntrip_caster.py),
+default `http://<gateway>:2101/SFV_BASE`) served on the field-mesh WiFi — no
+USB F9P, no `str2str`, no LoRa. The SIM7600G-H dongle remains the internet
+uplink and is unrelated to this path; its own GNSS is still **not** used for
+RTK base positioning, which needs the F9P's precision front-end and antenna.
 
-> **Not in scope for v1.** Mark as a roadmap item; no code changes needed now.
+An LTE/phone-relay NTRIP path (for rovers off the mesh) is an explicit future
+phase, not built now — the caster has no auth yet, which is fine only while
+it's mesh-local.
 
 ### Starlink — OFF the solar budget
 Starlink Mini draws ~15W idle / 17–40W active / 60W boot (360–960 Wh/day). It is
@@ -382,5 +387,10 @@ files it didn't create).
 - Tailscale-on-Pico is not native — remote access is Pi-proxied (see
   [`pico-watchdog.md`](pico-watchdog.md)).
 - Wire up `gpsd` + `chrony` to `/dev/ttyUSB_gnss` for mesh NTP stratum-1.
-- **Roadmap:** SparkFun ZED-F9P RTK base station + `str2str` NTRIP/mesh broadcast
-  (same receiver as the LandPlan survey stick; see RTK section above).
+- RTK base-station mode is built (see [RTK section](#rtk-base-station) and
+  [`docs/gpsrtk.md`](gpsrtk.md)) but needs a live BASE_ACTIVE run to confirm
+  RTCM3-alone on I2C doesn't reproduce the DDC overload, and independent
+  NTRIP-client validation of the caster.
+- **Cross-repo:** the LandPlan survey stick's Pi Zero has no NTRIP-client
+  code yet to consume the caster above — see the Codex handoff for what it
+  needs.

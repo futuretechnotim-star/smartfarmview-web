@@ -83,6 +83,20 @@ class Settings(BaseSettings):
     # missed cycle is noise, two in a row means the module's actually stuck.
     gps_fix_stale_timeout_s: int = 120
 
+    # RTK base-station survey-in (see gps_base_mode.py). Defaults follow
+    # u-blox's own survey-in application note guidance for a stationary base:
+    # 300s minimum duration, 2.5m accuracy limit — generous for *relative*
+    # rover accuracy even though absolute placement is looser (see
+    # docs/gpsrtk.md's survey-in tradeoff note).
+    gps_svin_min_dur_s: int = 300
+    gps_svin_acc_limit_m: float = 2.5
+
+    # Local NTRIP caster (ntrip_caster.py) serving RTCM3 corrections on the
+    # field-mesh WiFi once BASE_ACTIVE. 2101 is the IANA-registered NTRIP
+    # port. No auth in this phase — see ntrip_caster.py docstring.
+    rtk_caster_port: int = 2101
+    rtk_mountpoint: str = "SFV_BASE"
+
     # Home Assistant REST API — used for graceful shutdown on CRITICAL power mode.
     # Use the local address when gateway and HA share the same machine; use the
     # Tailscale IP (http://100.95.222.13:8123) when they are on separate hosts.

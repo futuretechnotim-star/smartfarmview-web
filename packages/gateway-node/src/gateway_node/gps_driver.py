@@ -14,11 +14,11 @@ still work — which is exactly why it looked like a random dropout. Disabling
 NMEA/RTCM3 on I2C makes NAV-PVT stream continuously (validated: 240 s straight,
 zero dropouts, no reconfigures). See docs/gpsrtk.md.
 
-NOTE: this disables RTCM3 *on the I2C port only*. This gateway is intended as
-an RTK base station, but the correction-sharing path to the rover (survey
-stick) is not built yet, and nothing currently consumes RTCM3 over I2C. When
-that path is designed, corrections must go out a port that isn't fighting
-NAV-PVT for the DDC buffer (UART is the natural choice) — revisit this then.
+Base-station mode (enter_survey_in / enter_base_active / exit_base_mode,
+driven by gps_base_mode.decide()) reuses this same I2C port for RTCM3 output,
+but NEVER concurrently with NAV-PVT — each transition disables the previous
+mode's output before enabling the next, so the DDC buffer only ever carries
+one periodic message stream at a time. See docs/gpsrtk.md.
 
 The startup config is written to RAM + BBR + Flash so it persists across
 reboots (previously it lived in RAM only and reverted to the module default —
@@ -49,20 +49,32 @@ from gateway_node.gps_protocol import (
     CFG_LAYER_BBR,
     CFG_LAYER_FLASH,
     CFG_LAYER_RAM,
+    CFG_MSGOUT_RTCM_1005_I2C,
+    CFG_MSGOUT_RTCM_1077_I2C,
+    CFG_MSGOUT_RTCM_1230_I2C,
     CFG_MSGOUT_UBX_NAV_PVT_I2C,
+    CFG_MSGOUT_UBX_NAV_SVIN_I2C,
+    CFG_TMODE_MODE,
+    CFG_TMODE_SVIN_ACC_LIMIT,
+    CFG_TMODE_SVIN_MIN_DUR,
     REG_BYTES_AVAIL_HIGH,
     REG_BYTES_AVAIL_LOW,
     REG_DATA_STREAM,
+    TMODE_DISABLED,
+    TMODE_SURVEY_IN,
     UBX_CFG_VALSET,
     UBX_CLASS_CFG,
     UBX_CLASS_NAV,
     UBX_NAV_PVT,
+    UBX_NAV_SVIN,
     ZED_F9P_I2C_ADDR,
     GpsFix,
+    SvinStatus,
     UbxStreamParser,
     build_cfg_valset,
     find_ack,
     parse_nav_pvt,
+    parse_nav_svin,
 )
 
 log = structlog.get_logger()
@@ -95,14 +107,90 @@ class ZedF9pDriver:
         layers = CFG_LAYER_RAM
         if persist:
             layers |= CFG_LAYER_BBR | CFG_LAYER_FLASH
-        self._write_raw(build_cfg_valset(_CONFIG_ITEMS, layers))
+        self._apply_config(_CONFIG_ITEMS, layers, event="zed_f9p_configured", persist=persist)
+
+    def _apply_config(
+        self, items: list[tuple[int, int]], layers: int, *, event: str, persist: bool = False
+    ) -> None:
+        """Write a CFG-VALSET and log the ACK/NAK/timeout result under `event`."""
+        self._write_raw(build_cfg_valset(items, layers))
         acked = self._read_ack(UBX_CLASS_CFG, UBX_CFG_VALSET, _ACK_TIMEOUT_S)
         if acked is True:
-            log.info("zed_f9p_configured", addr=hex(self._addr), persist=persist)
+            log.info(event, addr=hex(self._addr), persist=persist)
         elif acked is False:
-            log.warning("zed_f9p_config_nak", addr=hex(self._addr), persist=persist)
+            log.warning(f"{event}_nak", addr=hex(self._addr), persist=persist)
         else:
-            log.warning("zed_f9p_config_no_ack", addr=hex(self._addr), persist=persist)
+            log.warning(f"{event}_no_ack", addr=hex(self._addr), persist=persist)
+
+    def enter_survey_in(self, min_dur_s: int, acc_limit_m: float) -> None:
+        """Arm TMODE3 survey-in: NAV-PVT off, NAV-SVIN on — mode-switched, not
+        concurrent, matching the DDC-overrun fix (see module docstring)."""
+        items = [
+            (CFG_MSGOUT_UBX_NAV_PVT_I2C, 0),
+            (CFG_TMODE_SVIN_MIN_DUR, min_dur_s),
+            (CFG_TMODE_SVIN_ACC_LIMIT, round(acc_limit_m * 10000)),
+            (CFG_TMODE_MODE, TMODE_SURVEY_IN),
+            (CFG_MSGOUT_UBX_NAV_SVIN_I2C, 1),
+        ]
+        self._apply_config(items, CFG_LAYER_RAM, event="zed_f9p_survey_in_armed")
+
+    def poll_svin_status(self) -> SvinStatus | None:
+        """Read whatever NAV-SVIN frames have accumulated since the last call
+        and return the most recent one (None if nothing new arrived or on
+        I2C error — a GPS hiccup here shouldn't take down the survey)."""
+        latest: SvinStatus | None = None
+        try:
+            raw = self._read_chunk()
+            while raw:
+                for msg_class, msg_id, payload in self._parser.feed(raw):
+                    if msg_class == UBX_CLASS_NAV and msg_id == UBX_NAV_SVIN:
+                        svin = parse_nav_svin(payload)
+                        if svin is not None:
+                            latest = svin
+                raw = self._read_chunk()
+        except OSError as e:
+            log.warning("gps_svin_poll_i2c_error", error=str(e))
+        return latest
+
+    def enter_base_active(self) -> None:
+        """Switch from survey-in to RTCM3 output: NAV-SVIN off, RTCM3 on.
+        TMODE3 stays in survey-in mode — the module uses its own completed
+        survey result as the fixed reference, no separate FIXED-mode write
+        needed."""
+        items = [
+            (CFG_MSGOUT_UBX_NAV_SVIN_I2C, 0),
+            (CFG_MSGOUT_RTCM_1005_I2C, 1),
+            (CFG_MSGOUT_RTCM_1077_I2C, 1),
+            (CFG_MSGOUT_RTCM_1230_I2C, 1),
+        ]
+        self._apply_config(items, CFG_LAYER_RAM, event="zed_f9p_base_active_entered")
+
+    def exit_base_mode(self) -> None:
+        """Return to ROVER_NAV: RTCM3/NAV-SVIN off, TMODE3 disabled, NAV-PVT
+        back on. Symmetric with __init__'s startup config."""
+        items = [
+            (CFG_TMODE_MODE, TMODE_DISABLED),
+            (CFG_MSGOUT_RTCM_1005_I2C, 0),
+            (CFG_MSGOUT_RTCM_1077_I2C, 0),
+            (CFG_MSGOUT_RTCM_1230_I2C, 0),
+            (CFG_MSGOUT_UBX_NAV_SVIN_I2C, 0),
+            (CFG_MSGOUT_UBX_NAV_PVT_I2C, 1),
+        ]
+        self._apply_config(items, CFG_LAYER_RAM, event="zed_f9p_base_mode_exited")
+
+    def drain_rtcm3(self) -> bytes:
+        """Read whatever raw bytes have accumulated since the last call. Only
+        meaningful in BASE_ACTIVE, where the I2C stream is pure RTCM3 with no
+        UBX framing to parse — a straight byte relay to the NTRIP caster."""
+        chunks = bytearray()
+        try:
+            raw = self._read_chunk()
+            while raw:
+                chunks += raw
+                raw = self._read_chunk()
+        except OSError as e:
+            log.warning("gps_rtcm3_drain_i2c_error", error=str(e))
+        return bytes(chunks)
 
     def _write_raw(self, data: bytes) -> None:
         """Raw I2C write with no register byte (UBX config frames aren't
