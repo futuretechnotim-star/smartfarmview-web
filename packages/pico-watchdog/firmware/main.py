@@ -41,6 +41,7 @@ import time
 import config
 import fan_logic
 import gate_logic
+import net_recovery
 import network  # type: ignore[import-not-found]
 import ota
 import ota_prep
@@ -324,7 +325,12 @@ def main() -> None:
         # broker-down window (Pi off in PI_OFF) never triggers it.
         if state == gate_logic.PI_ON and link.is_connected():
             last_mqtt_ok = now
-        elif state == gate_logic.PI_ON and now - last_mqtt_ok >= config.NET_RECOVERY_TIMEOUT_S:
+        elif state == gate_logic.PI_ON and net_recovery.should_reboot(
+            now - last_mqtt_ok,
+            wlan.isconnected(),
+            timeout_wifi_down_s=config.NET_RECOVERY_TIMEOUT_WIFI_DOWN_S,
+            timeout_wifi_up_s=config.NET_RECOVERY_TIMEOUT_WIFI_UP_S,
+        ):
             log.append(f"net_recovery_reboot offline_s={round(now - last_mqtt_ok)}")
             _pulse_psu_power(power_en, psu_relay)
             time.sleep(0.3)  # let the flash write land before we reset

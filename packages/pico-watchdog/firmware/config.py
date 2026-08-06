@@ -93,8 +93,17 @@ MQTT_RECONNECT_INTERVAL_S = 30  # how often to retry MQTT after a dropped connec
 # PI_ON but no MQTT for this long → assume a wedged radio the reconnect (even
 # with a radio bounce) can't clear, and machine.reset() to self-heal. Generous
 # so it never thrashes; only fires while PI_ON (a Pico reset there keeps the Pi
-# powered via the NC relay).
-NET_RECOVERY_TIMEOUT_S = 900
+# powered via the NC relay). Used when the Pico's own wifi is ALSO down — a
+# stronger signal something is actually wrong, not just a quiet broker.
+NET_RECOVERY_TIMEOUT_WIFI_DOWN_S = 900
+# wifi up but MQTT down for this long → same self-heal, longer leash. Found
+# live 2026-08-06: the 900s timeout fired ~11 min into a routine boot (HA
+# Supervisor + several Docker add-ons still coming up) and needlessly
+# power-cycled an otherwise-healthy Pi. wifi being up means the Pico's own
+# radio/AP link is proven fine, so a quiet broker is far more likely a
+# software-side hiccup (HA update, Mosquitto add-on restarting) than a hung
+# Pi — worth waiting out before a disruptive power-cycle.
+NET_RECOVERY_TIMEOUT_WIFI_UP_S = 1800
 
 # --- Local log ---------------------------------------------------------------
 # Bounded on-flash event log for troubleshooting when MQTT is unreachable —
