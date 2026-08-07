@@ -201,7 +201,7 @@ event (not an ongoing "is it actually hung?" guess), so it can't turn into
 the reboot loop the heartbeat watchdog's `mqtt_connected` guard exists to
 prevent.
 
-## Sustained MQTT-loss recovery (`NET_RECOVERY_TIMEOUT_S`)
+## Sustained MQTT-loss recovery (`net_recovery.py`)
 
 While `PI_ON`, the stale-heartbeat watchdog (see the state machine diagram
 above) is deliberately suppressed whenever the Pico's own MQTT link is down
@@ -210,13 +210,24 @@ disconnected means the *Pico* is network-blind, not that the Pi is hung
 (rebooting then would just power-cycle the broker too, a self-sustaining
 reboot loop).
 
-But if MQTT stays down for `NET_RECOVERY_TIMEOUT_S` (900 s) straight while
-`PI_ON`, something has to break the stalemate — and it's ambiguous *which*
-side is actually broken: the Pico's own radio, or the Pi/broker it's trying
-to reach. Found live 2026-07-31: the gateway hung overnight, fully powered
-(green LED) and invisible on Tailscale, and nothing pulsed the relay because
-this path only reset the *Pico* — which does nothing for a genuinely wedged
-Pi. It needed a manual PSU restart.
+But if MQTT stays down long enough while `PI_ON`, something has to break the
+stalemate — and it's ambiguous *which* side is actually broken: the Pico's
+own radio, or the Pi/broker it's trying to reach. Found live 2026-07-31: the
+gateway hung overnight, fully powered (green LED) and invisible on Tailscale,
+and nothing pulsed the relay because this path only reset the *Pico* — which
+does nothing for a genuinely wedged Pi. It needed a manual PSU restart.
+
+The timeout isn't a single value: `net_recovery.should_reboot()` applies
+`NET_RECOVERY_TIMEOUT_WIFI_DOWN_S` (900s/15min) when the Pico's own wifi is
+also down — a stronger signal something is actually wrong — versus
+`NET_RECOVERY_TIMEOUT_WIFI_UP_S` (1800s/30min) when wifi is up but only MQTT
+is quiet. Found live 2026-08-06: the original single 900s timeout fired
+about 11 minutes into a routine boot (HA Supervisor + several Docker add-ons
+still coming up) and needlessly power-cycled an otherwise-healthy Pi. Wifi
+being up proves the Pico's own radio/AP link is fine, so a quiet broker in
+that case is more likely a software-side hiccup (an HA update, Mosquitto
+add-on restarting) than a hung Pi — worth waiting out before the disruptive
+power-cycle.
 
 `main.py`'s connectivity self-heal now pulses the PSU relay (the same
 `_pulse_psu_power` used by `ACTION_REBOOT` and the OTA recovery above)
