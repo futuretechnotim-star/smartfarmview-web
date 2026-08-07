@@ -20,6 +20,7 @@ class MQTTLink:
         self._last_heartbeat_ms = 0
         self._connected = False
         self._pending_ota_base_url: str | None = None
+        self._pending_test_bare_reset = False
 
     def connect(self) -> bool:
         try:
@@ -43,8 +44,11 @@ class MQTTLink:
             # ordinary loop instead, via pop_pending_ota().
             try:
                 data = json.loads(msg)
-                if data.get("cmd") == "ota" and data.get("base_url"):
+                cmd = data.get("cmd")
+                if cmd == "ota" and data.get("base_url"):
                     self._pending_ota_base_url = data["base_url"]
+                elif cmd == "test_bare_reset":
+                    self._pending_test_bare_reset = True
             except Exception:  # noqa: BLE001 — malformed command, ignore
                 pass
 
@@ -53,6 +57,13 @@ class MQTTLink:
         base_url = self._pending_ota_base_url
         self._pending_ota_base_url = None
         return base_url
+
+    def pop_pending_test_bare_reset(self) -> bool:
+        """Return and clear a pending test_bare_reset command — see main.py's
+        handling for what this diagnostic actually checks."""
+        pending = self._pending_test_bare_reset
+        self._pending_test_bare_reset = False
+        return pending
 
     def heartbeat_age_s(self) -> float:
         delta = time.ticks_diff(time.ticks_ms(), self._last_heartbeat_ms)  # type: ignore[attr-defined]

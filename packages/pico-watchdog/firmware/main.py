@@ -344,6 +344,22 @@ def main() -> None:
             else:
                 link.publish_telemetry({"gate_state": state, "ota_status": "skipped_not_pi_on"})
 
+        if link.pop_pending_test_bare_reset():
+            # Diagnostic only: reset the Pico directly, with NO relay pulse and
+            # NO gateway halt request first — deliberately skipping every
+            # safety step the OTA/net_recovery paths take. The whole OTA
+            # halt-first requirement rests on the assumption that PIN_PI_POWER_EN
+            # (not a relay, not confirmed fail-safe — see OTA_SHUTDOWN_TIMEOUT_S)
+            # glitches during machine.reset(). The Pico runs off its own
+            # independent battery regulator, so a bare reset should be
+            # electrically invisible to a live Pi UNLESS that pin actually
+            # glitches — this checks that directly. Compare gateway uptime
+            # from just before to just after: if it keeps climbing
+            # uninterrupted, the Pi was never touched.
+            log.append(f"test_bare_reset requested version={firmware_version.VERSION}")
+            time.sleep(0.3)  # let the flash write land before we reset
+            reset()
+
         voltage, v_source = _read_voltage(ina, adc)
         load_voltage_v = _read_ina_channel(ina, config.INA3221_CH_LOAD_5V)
         solar_voltage_v = _read_ina_channel(ina, config.INA3221_CH_SOLAR)
