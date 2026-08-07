@@ -173,6 +173,16 @@ option.
 
 ## OTA-triggered gateway restart
 
+**Deploying an update:** run `python3 scripts/build_ota_manifest.py firmware/`
+before copying files to `/opt/pico-fw` on the gateway — it stamps
+`firmware_version.py`'s `VERSION` with the current git short SHA (+`-dirty`
+if uncommitted) and writes `manifest.json`. The version is logged on every
+Pico boot and published in every telemetry snapshot (`fw_version`, also
+surfaced in HA as "Pico Firmware Version") — check it directly after an OTA
+instead of inferring activation from MQTT reconnect timing and battery
+voltage, which is what confirming the 2026-08-06 update actually took
+required before this existed.
+
 Applying an OTA update asks the gateway to halt first (`_prepare_and_apply_ota`
 in `main.py`), so the Pico's own post-activation reset never lands on a live
 Pi. The PSU relay's NC wiring keeps the Pi *powered* straight through that

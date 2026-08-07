@@ -204,6 +204,19 @@ def _publish_gateway_discovery(client: mqtt.Client) -> None:
             },
         ),
         (
+            "sensor",
+            "pico_fw_version",
+            {
+                "name": "Pico Firmware Version",
+                "unique_id": f"{node}_pico_fw_version",
+                "state_topic": pico_topic,
+                "value_template": "{{ value_json.fw_version }}",
+                "icon": "mdi:chip",
+                "entity_category": "diagnostic",
+                "device": device,
+            },
+        ),
+        (
             "binary_sensor",
             "cabinet_fan",
             {

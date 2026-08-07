@@ -40,6 +40,7 @@ import time
 
 import config
 import fan_logic
+import firmware_version
 import gate_logic
 import net_recovery
 import network  # type: ignore[import-not-found]
@@ -241,7 +242,7 @@ def _pulse_psu_power(power_en: Pin, psu_relay: Pin) -> None:
 
 def main() -> None:
     log = RollingLog(config.LOCAL_LOG_PATH, max_bytes=config.LOCAL_LOG_MAX_BYTES)
-    log.append("boot")
+    log.append(f"boot version={firmware_version.VERSION}")
 
     power_en = Pin(config.PIN_PI_POWER_EN, Pin.OUT, value=1)
     psu_relay = Pin(config.PIN_PSU_RELAY, Pin.OUT, value=_PSU_RELAY_ON)  # NC-wired — see above
@@ -431,6 +432,7 @@ def main() -> None:
                     ),
                     "fan_on": fan_on,
                     "wifi_rssi_dbm": wifi_rssi_dbm,
+                    "fw_version": firmware_version.VERSION,
                 }
             )
             last_telemetry = now
