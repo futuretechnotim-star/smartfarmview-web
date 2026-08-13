@@ -206,73 +206,98 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-echo "==> Phase 11: WiFi range-extension AP (BrosTrend AC5L, optional)"
+echo "==> Phase 11: wlan1 sfv-fieldmesh uplink (BrosTrend AC5L, optional)"
 # ---------------------------------------------------------------------------
 # This fleet-wide script must stay a no-op on every field node that doesn't
 # have the adapter — gate entirely on the hardware actually being present
 # (rtw88_8821cu, in-kernel since 6.12) rather than any per-node config flag.
-# Distinct SSID/subnet from the gateway's own sfv-fieldmesh AP (192.168.50.0/24)
-# so overlapping radio coverage can't cause duplicate-IP/rogue-DHCP conflicts —
-# this is a separate NAT island relayed back out through this node's own wlan0.
+#
+# Originally this phase turned wlan1 into a range-extension AP (relaying
+# sfv-fieldmesh outward as sfv-fieldmesh-ext1, NAT'd through wlan0). That was
+# retired 2026-08-12: `iw phy info` on this driver reports "interface
+# combinations are not supported", so the adapter can be a client OR an AP,
+# never both concurrently — a real repeater isn't possible on this hardware.
+# The onboard wlan0 radio (weak, short range) was the wrong place to spend
+# the good external-antenna radio anyway, so wlan1 now carries the node's own
+# uplink to sfv-fieldmesh instead. wlan0 is left alone as a second, lower-
+# priority path (e.g. WebsterFiber during bench testing) — see
+# [[project_landplanmesh1_wifi_fallback]] for the autoconnect-priority
+# pattern this mirrors.
 if [ -e /sys/class/net/wlan1/device/uevent ] && grep -q "8821cu" /sys/class/net/wlan1/device/uevent; then
-    echo "  AC5L (wlan1) detected — configuring range-extension AP"
+    echo "  AC5L (wlan1) detected — configuring as sfv-fieldmesh client uplink"
 
-    WIFI_EXT_PACKAGES=(hostapd dnsmasq iptables-persistent)
-    WIFI_EXT_NEEDED=()
-    for pkg in "${WIFI_EXT_PACKAGES[@]}"; do
-        dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null \
-            | grep -q "install ok installed" || WIFI_EXT_NEEDED+=("$pkg")
-    done
-    if [ ${#WIFI_EXT_NEEDED[@]} -gt 0 ]; then
-        sudo apt-get update -qq
-        sudo apt-get install -y "${WIFI_EXT_NEEDED[@]}"
-    fi
+    # Tear down any range-extension AP config left over from a node that was
+    # provisioned before 2026-08-12. All of this is idempotent/safe to run
+    # on a node that never had it either.
+    sudo systemctl disable --now sfv-ap-ext hostapd dnsmasq 2>/dev/null || true
+    sudo rm -f /etc/systemd/system/sfv-ap-ext.service \
+               /etc/dnsmasq.d/sfv-fieldmesh-ext1.conf \
+               /etc/sysctl.d/90-sfv-forward.conf \
+               /etc/NetworkManager/conf.d/unmanaged-wlan1.conf
+    sudo iptables -t nat -D POSTROUTING -s 192.168.51.0/24 -o wlan0 -j MASQUERADE 2>/dev/null || true
+    sudo iptables -D FORWARD -i wlan1 -o wlan0 -j ACCEPT 2>/dev/null || true
+    command -v netfilter-persistent >/dev/null 2>&1 && sudo netfilter-persistent save || true
+    sudo systemctl daemon-reload
 
-    sudo tee /etc/NetworkManager/conf.d/unmanaged-wlan1.conf > /dev/null << 'EOF'
-[keyfile]
-unmanaged-devices=interface-name:wlan1
-EOF
-    # Writing the conf.d file alone only takes effect on NetworkManager's next
-    # start/reload — if wlan1 was hot-plugged into an already-running system
-    # (as opposed to being present at boot), NM can grab it as a second WiFi
-    # *client* first (using whatever saved profile wlan0 already has, e.g.
-    # the gateway's own sfv-fieldmesh AP) before this phase ever runs, and
-    # hostapd/dnsmasq being "active" doesn't mean they actually hold the
-    # interface. Release it from NM immediately, at runtime, every run.
-    sudo nmcli device set wlan1 managed no 2>/dev/null || true
+    # Let NetworkManager manage wlan1 like any other WiFi device. A plain
+    # `nmcli device set managed yes` isn't enough to undo the old
+    # unmanaged-wlan1.conf — NM keeps that device's unmanaged state in memory
+    # from its last start/reload, so removing the conf.d file needs an actual
+    # restart to take effect.
+    sudo systemctl restart NetworkManager
+    sleep 3
+    sudo nmcli device set wlan1 managed yes 2>/dev/null || true
 
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-/dev/stdin}")" 2>/dev/null && pwd || echo "")"
-    CONF_SRC_DIR="$DEPLOY_PATH/scripts"
-    [ -f "$CONF_SRC_DIR/wifi-ext-hostapd.conf" ] || CONF_SRC_DIR="$SCRIPT_DIR"
+    # Reuse the sfv-fieldmesh password already staged on-device for wlan0
+    # (/boot/firmware/network-config, not committed to git) rather than
+    # hardcoding a secret in this script.
+    FIELDMESH_PSK=$(python3 -c "
+import yaml
+try:
+    with open('/boot/firmware/network-config') as f:
+        cfg = yaml.safe_load(f) or {}
+    print(cfg.get('network', {}).get('wifis', {}).get('wlan0', {})
+             .get('access-points', {}).get('sfv-fieldmesh', {})
+             .get('password', ''))
+except FileNotFoundError:
+    pass
+" 2>/dev/null)
 
-    if [ -f "$CONF_SRC_DIR/wifi-ext-hostapd.conf" ]; then
-        sudo cp "$CONF_SRC_DIR/wifi-ext-hostapd.conf" /etc/hostapd/hostapd.conf
-        sudo cp "$CONF_SRC_DIR/wifi-ext-dnsmasq.conf" /etc/dnsmasq.d/sfv-fieldmesh-ext1.conf
-        sudo cp "$CONF_SRC_DIR/sfv-ap-ext.service" /etc/systemd/system/sfv-ap-ext.service
-
-        echo 'net.ipv4.ip_forward=1' | sudo tee /etc/sysctl.d/90-sfv-forward.conf > /dev/null
-        sudo sysctl -p /etc/sysctl.d/90-sfv-forward.conf > /dev/null
-
-        # Idempotent: only add the NAT/forward rules if not already present.
-        sudo iptables -t nat -C POSTROUTING -s 192.168.51.0/24 -o wlan0 -j MASQUERADE 2>/dev/null \
-            || sudo iptables -t nat -A POSTROUTING -s 192.168.51.0/24 -o wlan0 -j MASQUERADE
-        sudo iptables -C FORWARD -i wlan1 -o wlan0 -j ACCEPT 2>/dev/null \
-            || sudo iptables -A FORWARD -i wlan1 -o wlan0 -j ACCEPT
-        sudo iptables -C FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null \
-            || sudo iptables -A FORWARD -m state --state RELATED,ESTABLISHED -j ACCEPT
-        sudo netfilter-persistent save
-
-        sudo systemctl daemon-reload
-        sudo systemctl unmask hostapd
-        sudo systemctl enable sfv-ap-ext hostapd dnsmasq
-        # Restart (not just enable --now) so an already-"active" unit that
-        # never actually held the interface (see NM race above) reclaims it.
-        sudo systemctl restart sfv-ap-ext
-        sudo systemctl restart hostapd
-        sudo systemctl restart dnsmasq
-        echo "  range-extension AP configured (ssid=sfv-fieldmesh-ext1, 192.168.51.0/24)"
+    if [ -z "$FIELDMESH_PSK" ]; then
+        echo "  WARNING: no sfv-fieldmesh password found in /boot/firmware/network-config — skipping wlan1 profile"
     else
-        echo "  WARNING: wifi-ext-*.conf not deployed yet — skipping (will apply on next deploy)"
+        CONN_NAME="netplan-wlan1-sfv-fieldmesh"
+        if nmcli -t -f NAME connection show | grep -qx "$CONN_NAME"; then
+            sudo nmcli connection modify "$CONN_NAME" wifi-sec.psk "$FIELDMESH_PSK"
+        else
+            sudo nmcli connection add type wifi ifname wlan1 con-name "$CONN_NAME" \
+                ssid sfv-fieldmesh \
+                wifi-sec.key-mgmt wpa-psk wifi-sec.psk "$FIELDMESH_PSK" \
+                connection.autoconnect yes connection.autoconnect-priority 10
+        fi
+        echo "  wlan1 configured as sfv-fieldmesh client (autoconnect-priority 10)"
+
+        # The cloud-init/netplan-rendered wlan0 profile for the same SSID
+        # (from /boot/firmware/network-config) has no connection.interface-name
+        # pin, so NetworkManager is free to hand it to *either* radio — and
+        # will happily grab wlan1 for it, leaving wlan0 idle with nothing to
+        # connect to and no real redundancy. Pin it to wlan0 explicitly so
+        # both radios independently hold their own connection to sfv-fieldmesh.
+        WLAN0_CONN=$(nmcli -t -f NAME,DEVICE connection show \
+            | awk -F: '$1 ~ /^netplan-wlan0-sfv-fieldmesh$/ {print $1; exit}')
+        if [ -n "$WLAN0_CONN" ]; then
+            sudo nmcli connection modify "$WLAN0_CONN" connection.interface-name wlan0
+            # wlan1 give it a better (lower) route metric than wlan0 — same
+            # destination network, but the AC5L is the better radio and
+            # should win the default route whenever both are connected.
+            sudo nmcli connection modify "$CONN_NAME" ipv4.route-metric 100
+            sudo nmcli connection modify "$WLAN0_CONN" ipv4.route-metric 200
+            # Route-metric changes only take effect on (re)activation, not on
+            # an already-connected profile — reassert both explicitly.
+            sudo nmcli connection up "$CONN_NAME" ifname wlan1 2>/dev/null || true
+            sudo nmcli connection up "$WLAN0_CONN" ifname wlan0 2>/dev/null || true
+            echo "  wlan0's sfv-fieldmesh profile pinned to wlan0 (was unpinned/stealable by wlan1)"
+        fi
     fi
 else
     echo "  no AC5L detected on wlan1 — skipping (expected on nodes without the adapter)"
