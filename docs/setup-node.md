@@ -353,8 +353,12 @@ ssh -i ~/.ssh/gateway_deploy techno@sfv-gateway.local \
   "sudo install -d -o techno -g techno /opt/gateway-node /opt/power-policy"
 
 # Sync packages
-rsync -a -e "ssh -i ~/.ssh/gateway_deploy" packages/gateway-node/ techno@sfv-gateway.local:/opt/gateway-node/
-rsync -a -e "ssh -i ~/.ssh/gateway_deploy" packages/power-policy/  techno@sfv-gateway.local:/opt/power-policy/
+# --exclude='.venv' is required: without it, a .venv present on the dev
+# machine syncs into the Pi's /opt/gateway-node/.venv (same relative path)
+# and clobbers its pyvenv.cfg + entry-point scripts with dev-machine paths,
+# breaking every service sharing that venv until it's rebuilt.
+rsync -a --exclude='.venv' -e "ssh -i ~/.ssh/gateway_deploy" packages/gateway-node/ techno@sfv-gateway.local:/opt/gateway-node/
+rsync -a --exclude='.venv' -e "ssh -i ~/.ssh/gateway_deploy" packages/power-policy/  techno@sfv-gateway.local:/opt/power-policy/
 
 # Provision (installs venv, deps, systemd service)
 ssh -i ~/.ssh/gateway_deploy techno@sfv-gateway.local "sudo bash /opt/gateway-node/scripts/pi-setup.sh"

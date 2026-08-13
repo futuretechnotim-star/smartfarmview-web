@@ -14,7 +14,10 @@ install -d -o techno -g techno "$DEPLOY_DIR"
 
 echo "[3/7] Setting up Python venv..."
 if [ ! -f "$DEPLOY_DIR/.venv/bin/pip" ]; then
-    sudo -u techno python3 -m venv "$DEPLOY_DIR/.venv"
+    # --system-site-packages: picamera2 and adafruit_servokit are only
+    # available via apt (python3-picamera2, python3-adafruit-circuitpython-*),
+    # not PyPI-installable in an isolated venv on this platform.
+    sudo -u techno python3 -m venv --system-site-packages "$DEPLOY_DIR/.venv"
     sudo -u techno "$DEPLOY_DIR/.venv/bin/python" -m ensurepip --upgrade
     sudo -u techno "$DEPLOY_DIR/.venv/bin/pip" install --upgrade pip -q
 fi
@@ -24,7 +27,7 @@ echo "[4/7] Installing power-policy shared lib..."
 sudo -u techno "$DEPLOY_DIR/.venv/bin/pip" install -q -e "$DEPLOY_DIR/../power-policy"
 
 echo "[5/7] Installing gateway-node..."
-sudo -u techno "$DEPLOY_DIR/.venv/bin/pip" install -q -e "$DEPLOY_DIR"
+sudo -u techno "$DEPLOY_DIR/.venv/bin/pip" install -q -e "$DEPLOY_DIR[hardware]"
 
 echo "[6/7] Installing systemd service..."
 cp "$DEPLOY_DIR/scripts/gateway-power.service" /etc/systemd/system/
