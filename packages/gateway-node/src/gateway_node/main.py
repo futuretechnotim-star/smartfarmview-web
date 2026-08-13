@@ -84,14 +84,17 @@ def _publish_gateway_discovery(client: mqtt.Client) -> None:
     entities: list[tuple[str, str, dict[str, object]]] = [
         # ── Power brain ──────────────────────────────────────────────────────
         (
-            "select",
+            # power_mode is decided by the power brain, not user-settable, so
+            # this must be a read-only "sensor" — MQTT "select" requires a
+            # command_topic (it's inherently a settable entity), which this
+            # payload never had, so HA rejected the discovery config outright.
+            "sensor",
             "power_mode",
             {
                 "name": "Power Mode",
                 "unique_id": f"{node}_power_mode",
                 "state_topic": power_topic,
                 "value_template": "{{ value_json.mode }}",
-                "options": ["NORMAL", "ECO", "LOW", "CRITICAL"],
                 "icon": "mdi:solar-power",
                 "entity_category": "diagnostic",
                 "device": device,
@@ -253,12 +256,21 @@ def _publish_gateway_discovery(client: mqtt.Client) -> None:
 
 
 def _publish_field_node_camera(client: mqtt.Client, node_id: str) -> None:
-    """Register a field node's snapshot camera in HA when it first comes online."""
+    """Register a field node's snapshot camera in HA when it first comes online.
+
+    Must match field_node/telemetry.py's own publish_discovery() camera entry
+    (unique_id, name, topic, device) byte-for-byte — both publish (retained) to
+    the same discovery topic as a fallback/idempotent duplicate. A mismatch here
+    previously caused each publish to orphan the other's entity in HA's registry
+    (unique_id changing under the same discovery topic reads as "entity removed,
+    new entity added"), producing a stale unavailable entity plus a new one with
+    a garbled double-prefixed entity_id every time this fired.
+    """
     prefix = settings.mqtt_discovery_prefix
     topic = f"{prefix}/camera/{node_id}/snapshot/config"
     payload = {
-        "name": f"{node_id} Camera",
-        "unique_id": f"{node_id}_snapshot",
+        "name": "Camera",
+        "unique_id": f"{node_id}_camera",
         "topic": f"securitymesh/{node_id}/snapshot",
         "device": {
             "identifiers": [node_id],
