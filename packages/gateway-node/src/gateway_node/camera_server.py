@@ -123,48 +123,97 @@ class _Handler(BaseHTTPRequestHandler):
 
 # ── Pan/tilt controller ───────────────────────────────────────────────────────
 
+# Sweep pace: degrees moved per tick and the delay between ticks.
+_SWEEP_STEP_DEG = 2.0
+_SWEEP_DELAY_S = 0.01
+
+
+class _AxisMover:
+    """Runs one servo channel toward whatever target was set most recently.
+
+    A single background thread owns the channel. `set_target` just records the
+    new target and wakes the thread — it never blocks and never queues stale
+    intermediate targets, so rapid successive commands (e.g. dragging a slider)
+    collapse into "go to the latest position" instead of visibly replaying
+    every position passed through along the way.
+    """
+
+    def __init__(
+        self,
+        kit: ServoKit,
+        channel: int,
+        start: float,
+        min_angle: float,
+        max_angle: float,
+        on_reached: Any,
+    ) -> None:
+        self._kit = kit
+        self._channel = channel
+        self._min = min_angle
+        self._max = max_angle
+        self._on_reached = on_reached
+        self._current = float(start)
+        self._target = float(start)
+        self._cond = threading.Condition()
+        threading.Thread(target=self._run, daemon=True).start()
+
+    @property
+    def position(self) -> float:
+        with self._cond:
+            return self._current
+
+    def set_target(self, target: float) -> float:
+        target = max(self._min, min(self._max, target))
+        with self._cond:
+            self._target = target
+            self._cond.notify_all()
+        return target
+
+    def _run(self) -> None:
+        while True:
+            with self._cond:
+                while self._current == self._target:
+                    self._cond.wait()
+                target = self._target
+            if self._current < target:
+                self._current = min(target, self._current + _SWEEP_STEP_DEG)
+            else:
+                self._current = max(target, self._current - _SWEEP_STEP_DEG)
+            self._kit.servo[self._channel].angle = self._current
+            if self._current == target:
+                self._on_reached(self._current)
+            time.sleep(_SWEEP_DELAY_S)
+
 
 class _PanTilt:
-    """Thread-safe servo controller. Sweeps smoothly to target angles."""
+    """Owns the pan and tilt axes; each moves independently and concurrently."""
 
-    def __init__(self) -> None:
+    def __init__(self, on_pan_reached: Any, on_tilt_reached: Any) -> None:
         self._kit = ServoKit(channels=16)
-        self._lock = threading.Lock()
-        self._pan = float(_CENTER)
-        self._tilt = float(_CENTER)
         # Start centred
         self._kit.servo[_PAN_CHANNEL].angle = _CENTER
         self._kit.servo[_TILT_CHANNEL].angle = _CENTER
+        self._pan_axis = _AxisMover(
+            self._kit, _PAN_CHANNEL, _CENTER, _PAN_MIN, _PAN_MAX, on_pan_reached
+        )
+        self._tilt_axis = _AxisMover(
+            self._kit, _TILT_CHANNEL, _CENTER, _TILT_MIN, _TILT_MAX, on_tilt_reached
+        )
         log.info("pan_tilt_initialised", pan=_CENTER, tilt=_CENTER)
 
     @property
     def pan(self) -> float:
-        return self._pan
+        return self._pan_axis.position
 
     @property
     def tilt(self) -> float:
-        return self._tilt
+        return self._tilt_axis.position
 
-    def move_pan(self, target: float) -> float:
-        target = max(_PAN_MIN, min(_PAN_MAX, target))
-        with self._lock:
-            self._sweep(_PAN_CHANNEL, self._pan, target)
-            self._pan = target
-        return target
+    def set_pan(self, target: float) -> float:
+        return self._pan_axis.set_target(target)
 
-    def move_tilt(self, target: float) -> float:
-        target = max(_TILT_MIN, min(_TILT_MAX, target))
-        with self._lock:
-            self._sweep(_TILT_CHANNEL, self._tilt, target)
-            self._tilt = target
-        return target
-
-    def _sweep(
-        self, channel: int, start: float, end: float, steps: int = 30, delay: float = 0.02
-    ) -> None:
-        for i in range(steps + 1):
-            self._kit.servo[channel].angle = start + (end - start) * i / steps
-            time.sleep(delay)
+    def set_tilt(self, target: float) -> float:
+        return self._tilt_axis.set_target(target)
 
 
 # ── MQTT discovery ────────────────────────────────────────────────────────────
@@ -268,9 +317,6 @@ def main() -> None:
     tilt_state_topic = f"securitymesh/{node_id}/camera/tilt"
     status_topic = f"securitymesh/{node_id}/camera/status"
 
-    # ── Pan/tilt ─────────────────────────────────────────────────────────────
-    pantilt = _PanTilt()
-
     # ── MQTT ─────────────────────────────────────────────────────────────────
     client: mqtt.Client = mqtt.Client(
         mqtt.CallbackAPIVersion.VERSION2,  # type: ignore[attr-defined]
@@ -279,6 +325,17 @@ def main() -> None:
     if settings.mqtt_username:
         client.username_pw_set(settings.mqtt_username, settings.mqtt_password)
     client.will_set(status_topic, "offline", retain=True)
+
+    # ── Pan/tilt ─────────────────────────────────────────────────────────────
+    def _on_pan_reached(angle: float) -> None:
+        client.publish(pan_state_topic, str(int(angle)), retain=True)
+        log.info("pan_moved", angle=angle)
+
+    def _on_tilt_reached(angle: float) -> None:
+        client.publish(tilt_state_topic, str(int(angle)), retain=True)
+        log.info("tilt_moved", angle=angle)
+
+    pantilt = _PanTilt(_on_pan_reached, _on_tilt_reached)
 
     def on_connect(c: mqtt.Client, userdata: Any, flags: Any, rc: Any, props: Any = None) -> None:
         c.subscribe(pan_cmd_topic)
@@ -294,22 +351,9 @@ def main() -> None:
             return
 
         if msg.topic == pan_cmd_topic:
-
-            def _do_pan() -> None:
-                new_pos = pantilt.move_pan(target)
-                c.publish(pan_state_topic, str(int(new_pos)), retain=True)
-                log.info("pan_moved", angle=new_pos)
-
-            threading.Thread(target=_do_pan, daemon=True).start()
-
+            pantilt.set_pan(target)
         elif msg.topic == tilt_cmd_topic:
-
-            def _do_tilt() -> None:
-                new_pos = pantilt.move_tilt(target)
-                c.publish(tilt_state_topic, str(int(new_pos)), retain=True)
-                log.info("tilt_moved", angle=new_pos)
-
-            threading.Thread(target=_do_tilt, daemon=True).start()
+            pantilt.set_tilt(target)
 
     client.on_connect = on_connect
     client.on_message = on_message
