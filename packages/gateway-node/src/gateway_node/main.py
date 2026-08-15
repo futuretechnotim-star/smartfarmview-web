@@ -360,10 +360,13 @@ def main() -> None:
             log.warning("pico_telemetry_parse_error", error=str(e), payload=msg.payload[:200])
             return
 
-        # OTA status updates share this topic but aren't full telemetry —
+        # OTA/reboot status updates share this topic but aren't full telemetry —
         # they carry no soc_pct, so log them distinctly instead of erroring.
         if "ota_status" in data:
             log.info("pico_ota_status", **data)
+            return
+        if "reboot_status" in data:
+            log.info("pico_reboot_status", **data)
             return
 
         try:

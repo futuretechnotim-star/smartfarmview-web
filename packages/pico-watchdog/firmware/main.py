@@ -134,43 +134,33 @@ def _read_rssi(wlan: "network.WLAN") -> "int | None":
         return None
 
 
-def _prepare_and_apply_ota(
+def _wait_for_gateway_halt(
     link: MQTTLink,
     halt_confirmed_pin: Pin,
-    power_en: Pin,
-    psu_relay: Pin,
-    base_url: str,
-) -> None:
-    """Stage the update (needs the gateway's own network/AP, so this runs
-    first, before anything is asked to halt), then ask the gateway to
-    gracefully halt and wait for confirmation before activating.
-
-    Activating ends in machine.reset(), which briefly leaves the relay pins
-    undriven — until the relay's own wiring makes that fail-safe (see
-    docs/gateway-node.md), that reboot must not land on a live Pi. Activation
-    itself needs no network, which is exactly why staging happens first: by
-    the time the gateway has actually halted, its AP is down too, so the file
-    server a single-step apply would still be trying to reach is already
-    unreachable.
+    timeout_s: float,
+    status_key: str,
+) -> bool:
+    """Ask the gateway to gracefully halt and block until halt_confirmed
+    trips or timeout_s elapses. Returns True if halt was confirmed, False on
+    timeout. Shared by the OTA flow and the operator-triggered reboot_gateway
+    command — both need the identical wait, just with a different telemetry
+    status_key so HA/logs can tell which one is in progress (gateway-node's
+    pico telemetry handler special-cases "ota_status"; anything else falls
+    through toward the normal soc_pct parse, so a plain reboot must use its
+    own key, e.g. "reboot_status", not "ota_status").
 
     ``{"cmd": "prepare_shutdown"}`` below causes the gateway to actually halt
-    unconditionally, the moment it's received — independent of whatever this
-    function decides afterwards. So every exit from here past that point
-    (PROCEED, ABORT, or an activate_staged() failure) must recover it: the
-    PSU relay's NC wiring keeps the Pi powered straight *through* an OS halt
-    with no self-wake, and the stale-heartbeat watchdog can't do it either
-    (deliberately suppressed whenever our own MQTT link is down — see
-    gate_logic.decide — which it always is right after this, since the
+    unconditionally, the moment it's received — independent of whatever the
+    caller decides afterwards. So every caller, on every exit path past this
+    call (PROCEED, ABORT, or anything else), MUST pulse the PSU relay to
+    recover it: the relay's NC wiring keeps the Pi powered straight *through*
+    an OS halt with no self-wake, and the stale-heartbeat watchdog can't do
+    it either (deliberately suppressed whenever our own MQTT link is down —
+    see gate_logic.decide — which it always is right after this, since the
     broker runs on the same Pi). Found live: an OTA that aborted on
     halt_confirmed never tripping left the gateway halted with nothing
     watching for over 8 minutes, until it was power-cycled by hand.
     """
-    link.publish_telemetry({"ota_status": "staging"})
-    stage_error = ota.stage_update(base_url)
-    if stage_error is not None:
-        link.publish_telemetry({"ota_status": "stage_failed", "ota_error": stage_error})
-        return
-
     if not link.is_connected():
         link.connect()
     link.publish(config.GATEWAY_CMD_TOPIC, {"cmd": "prepare_shutdown"})
@@ -189,23 +179,55 @@ def _prepare_and_apply_ota(
         link.poll()
         halt_confirmed = bool(halt_confirmed_pin.value())
         elapsed = time.time() - start
-        outcome = ota_prep.decide_ota_wait(halt_confirmed, elapsed, config.OTA_SHUTDOWN_TIMEOUT_S)
+        outcome = ota_prep.decide_ota_wait(halt_confirmed, elapsed, timeout_s)
 
         if outcome == ota_prep.PROCEED:
-            break
+            return True
         if outcome == ota_prep.ABORT:
-            link.publish_telemetry({"ota_status": "aborted_gateway_did_not_halt"})
-            _pulse_psu_power(power_en, psu_relay)
-            return
+            return False
 
         link.publish_telemetry(
-            {"ota_status": "waiting_for_gateway_halt", "elapsed_s": round(elapsed, 1)}
+            {status_key: "waiting_for_gateway_halt", "elapsed_s": round(elapsed, 1)}
         )
         time.sleep(config.LOOP_INTERVAL_S)
 
+
+def _prepare_and_apply_ota(
+    link: MQTTLink,
+    halt_confirmed_pin: Pin,
+    power_en: Pin,
+    psu_relay: Pin,
+    base_url: str,
+) -> None:
+    """Stage the update (needs the gateway's own network/AP, so this runs
+    first, before anything is asked to halt), then ask the gateway to
+    gracefully halt and wait for confirmation before activating.
+
+    Activating ends in machine.reset(), which briefly leaves the relay pins
+    undriven — until the relay's own wiring makes that fail-safe (see
+    docs/gateway-node.md), that reboot must not land on a live Pi. Activation
+    itself needs no network, which is exactly why staging happens first: by
+    the time the gateway has actually halted, its AP is down too, so the file
+    server a single-step apply would still be trying to reach is already
+    unreachable.
+    """
+    link.publish_telemetry({"ota_status": "staging"})
+    stage_error = ota.stage_update(base_url)
+    if stage_error is not None:
+        link.publish_telemetry({"ota_status": "stage_failed", "ota_error": stage_error})
+        return
+
+    halted = _wait_for_gateway_halt(
+        link, halt_confirmed_pin, config.OTA_SHUTDOWN_TIMEOUT_S, "ota_status"
+    )
+    if not halted:
+        link.publish_telemetry({"ota_status": "aborted_gateway_did_not_halt"})
+        _pulse_psu_power(power_en, psu_relay)
+        return
+
     # Recover the gateway now, unconditionally, before activate_staged() gets
-    # a chance to fail or reset — see the docstring above for why nothing
-    # else will do this.
+    # a chance to fail or reset — see _wait_for_gateway_halt's docstring for
+    # why nothing else will do this.
     _pulse_psu_power(power_en, psu_relay)
 
     link.publish_telemetry({"ota_status": "activating"})
@@ -343,6 +365,29 @@ def main() -> None:
                 _prepare_and_apply_ota(link, halt_confirmed_pin, power_en, psu_relay, ota_base_url)
             else:
                 link.publish_telemetry({"gate_state": state, "ota_status": "skipped_not_pi_on"})
+
+        if link.pop_pending_reboot_gateway():
+            # Operator-triggered graceful halt + PSU power cycle — for remote
+            # recovery (e.g. resetting a wedged servo/camera process) when
+            # there's no other way to reach the gateway. See
+            # _wait_for_gateway_halt's docstring for why the relay pulse must
+            # happen unconditionally, confirmed or not.
+            if state == gate_logic.PI_ON:
+                log.append("reboot_gateway requested")
+                halted = _wait_for_gateway_halt(
+                    link, halt_confirmed_pin, config.OTA_SHUTDOWN_TIMEOUT_S, "reboot_status"
+                )
+                link.publish_telemetry(
+                    {
+                        "reboot_status": "halt_confirmed"
+                        if halted
+                        else "halt_timed_out_pulsing_anyway"
+                    }
+                )
+                _pulse_psu_power(power_en, psu_relay)
+                log.append(f"reboot_gateway halt_confirmed={halted} — relay pulsed")
+            else:
+                link.publish_telemetry({"gate_state": state, "reboot_status": "skipped_not_pi_on"})
 
         if link.pop_pending_test_bare_reset():
             # Diagnostic only: reset the Pico directly, with NO relay pulse and

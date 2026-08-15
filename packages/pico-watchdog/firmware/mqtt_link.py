@@ -21,6 +21,7 @@ class MQTTLink:
         self._connected = False
         self._pending_ota_base_url: str | None = None
         self._pending_test_bare_reset = False
+        self._pending_reboot_gateway = False
 
     def connect(self) -> bool:
         try:
@@ -49,6 +50,8 @@ class MQTTLink:
                     self._pending_ota_base_url = data["base_url"]
                 elif cmd == "test_bare_reset":
                     self._pending_test_bare_reset = True
+                elif cmd == "reboot_gateway":
+                    self._pending_reboot_gateway = True
             except Exception:  # noqa: BLE001 — malformed command, ignore
                 pass
 
@@ -63,6 +66,14 @@ class MQTTLink:
         handling for what this diagnostic actually checks."""
         pending = self._pending_test_bare_reset
         self._pending_test_bare_reset = False
+        return pending
+
+    def pop_pending_reboot_gateway(self) -> bool:
+        """Return and clear a pending reboot_gateway command — an operator-
+        triggered graceful halt + PSU power cycle, for remote recovery when
+        SSH/HA aren't responding. See main.py's handling."""
+        pending = self._pending_reboot_gateway
+        self._pending_reboot_gateway = False
         return pending
 
     def heartbeat_age_s(self) -> float:
